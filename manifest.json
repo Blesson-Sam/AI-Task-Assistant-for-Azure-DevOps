@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "AI Task Assistant for Azure DevOps",
+  "description": "Break down User Stories into well-estimated tasks using AI. Adjusts estimates based on developer experience level.",
+  "version": "1.0.0",
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://dev.azure.com/*",
+    "https://*.visualstudio.com/*",
+    "https://api.groq.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AI Task Assistant",
+    "default_icon": "icon.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://dev.azure.com/*", "https://*.visualstudio.com/*"],
+      "js": ["content.js"]
+    }
+  ]
+}

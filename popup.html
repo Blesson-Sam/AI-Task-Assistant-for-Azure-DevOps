@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <h1>AI Task Assistant</h1>
+        <span class="header-subtitle">Azure DevOps Intelligence</span>
+      </div>
+      <button class="settings-btn" id="settingsBtn" title="Settings">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </header>
+
+    <!-- Tab Navigation -->
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="create">
+        <span class="tab-icon">✚</span>
+        <span class="tab-label">Create Task</span>
+      </button>
+      <button class="tab-btn" data-tab="evaluate">
+        <span class="tab-icon">✓</span>
+        <span class="tab-label">Evaluate</span>
+      </button>
+      <button class="tab-btn" data-tab="insights">
+        <span class="tab-icon">📊</span>
+        <span class="tab-label">Insights</span>
+      </button>
+    </nav>
+
+    <!-- Tab Content Container -->
+    <div class="tab-content-wrapper">
+      
+      <!-- TAB 1: Create Task -->
+      <div class="tab-content active" id="tab-create">
+        <div class="tab-panel">
+          <!-- Work Item Type Selection -->
+          <div class="form-group">
+            <label class="form-label">Work Item Type</label>
+            <div class="type-selector">
+              <button class="type-btn" data-type="Feature">
+                <span class="type-icon">🎯</span>
+                <span>Feature</span>
+              </button>
+              <button class="type-btn active" data-type="User Story">
+                <span class="type-icon">📖</span>
+                <span>User Story</span>
+              </button>
+              <button class="type-btn" data-type="Task">
+                <span class="type-icon">✅</span>
+                <span>Task</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- User Story Input -->
+          <div class="form-group">
+            <label class="form-label">Work Item ID (optional)</label>
+            <div class="input-row">
+              <input type="text" id="workItemId" class="form-input" placeholder="e.g., 12345" />
+              <button class="btn btn-secondary" id="fetchWorkItem">
+                <span>Fetch</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Title</label>
+            <input type="text" id="workItemTitle" class="form-input" placeholder="Enter work item title..." />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Description</label>
+            <textarea id="workItemDescription" class="form-textarea" rows="4" placeholder="As a user, I want to...&#10;&#10;Acceptance Criteria:&#10;- Criteria 1&#10;- Criteria 2"></textarea>
+          </div>
+
+          <!-- Work Item Info Display -->
+          <div id="workItemInfo" class="info-cards hidden">
+            <div class="info-card iteration">
+              <span class="info-icon">🔄</span>
+              <div class="info-content">
+                <span class="info-label">Iteration</span>
+                <span class="info-value" id="iterationPath">-</span>
+              </div>
+            </div>
+            <div class="info-card assignee">
+              <span class="info-icon">👤</span>
+              <div class="info-content">
+                <span class="info-label">Assigned To</span>
+                <span class="info-value" id="assigneeName">-</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Developer Experience -->
+          <div class="form-group">
+            <label class="form-label">Developer Experience Level</label>
+            <select id="level" class="form-select">
+              <option value="fresher">Fresher (0-1 years) - Learning the tech stack</option>
+              <option value="junior">Junior (1-2 years) - Needs guidance</option>
+              <option value="mid" selected>Mid-Level (2-5 years) - Works independently</option>
+              <option value="senior">Senior (5+ years) - Expert in the domain</option>
+            </select>
+            <div class="experience-hint" id="experienceInfo">
+              <strong>Mid-Level:</strong> Standard estimates. Works independently with occasional guidance.
+            </div>
+          </div>
+
+          <!-- Days to Complete -->
+          <div class="form-group">
+            <label class="form-label">Days to Complete</label>
+            <div class="input-row">
+              <input type="number" id="daysToComplete" class="form-input" min="1" max="30" value="5" />
+              <span class="input-suffix">days</span>
+            </div>
+            <p class="form-hint">AI will fit tasks within this timeframe (6 hrs/day)</p>
+          </div>
+
+          <!-- Action Button -->
+          <button class="btn btn-primary btn-lg" id="generateTasks">
+            <span class="btn-icon">✨</span>
+            <span>Generate Tasks with AI</span>
+          </button>
+
+          <!-- Loading State -->
+          <div id="createLoading" class="loading-state hidden">
+            <div class="spinner"></div>
+            <p>AI is analyzing and breaking down your work item...</p>
+          </div>
+
+          <!-- Generated Tasks -->
+          <div id="tasksSection" class="tasks-section hidden">
+            <div class="section-header">
+              <h3>Generated Tasks</h3>
+              <span class="badge badge-success" id="taskCount">0 tasks</span>
+            </div>
+            
+            <div id="tasksList" class="tasks-list"></div>
+            
+            <div class="total-estimate" id="totalEstimate">
+              <div class="estimate-label">Total Estimate</div>
+              <div class="estimate-value">0 hours</div>
+            </div>
+            
+            <div class="action-row">
+              <button class="btn btn-success" id="createAllTasks">
+                <span class="btn-icon">🚀</span>
+                <span>Create in ADO</span>
+              </button>
+              <button class="btn btn-ghost" id="clearTasks">Clear</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: Evaluate Created Tasks -->
+      <div class="tab-content" id="tab-evaluate">
+        <div class="tab-panel">
+          <div class="tab-intro">
+            <h3>📋 Evaluate Tasks</h3>
+            <p>Validate if all tasks under a User Story are complete, correct, and well-estimated.</p>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">User Story Title</label>
+            <input type="text" id="evalStoryTitle" class="form-input" placeholder="Enter user story title..." />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">User Story Description</label>
+            <textarea id="evalStoryDescription" class="form-textarea" rows="4" placeholder="Paste the user story description and acceptance criteria..."></textarea>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">User Story ID (for fetching linked tasks)</label>
+            <div class="input-row">
+              <input type="text" id="evalStoryId" class="form-input" placeholder="e.g., 12345" />
+              <button class="btn btn-secondary" id="fetchEvalStory">Fetch Story</button>
+            </div>
+          </div>
+
+          <button class="btn btn-primary btn-lg" id="evaluateTasks">
+            <span class="btn-icon">🔍</span>
+            <span>Analyze & Evaluate Tasks</span>
+          </button>
+
+          <!-- Loading State -->
+          <div id="evaluateLoading" class="loading-state hidden">
+            <div class="spinner"></div>
+            <p>Fetching and analyzing linked tasks...</p>
+          </div>
+
+          <!-- Evaluation Results -->
+          <div id="evaluationResults" class="evaluation-results hidden">
+            <div class="eval-section">
+              <h4 class="eval-section-title">
+                <span class="status-icon success">✓</span>
+                Correct Tasks
+              </h4>
+              <div id="correctTasks" class="eval-items"></div>
+            </div>
+
+            <div class="eval-section">
+              <h4 class="eval-section-title">
+                <span class="status-icon warning">⚠</span>
+                Tasks to Update
+              </h4>
+              <div id="updateTasks" class="eval-items"></div>
+            </div>
+
+            <div class="eval-section">
+              <h4 class="eval-section-title">
+                <span class="status-icon error">✕</span>
+                Tasks to Delete
+              </h4>
+              <div id="deleteTasks" class="eval-items"></div>
+            </div>
+
+            <div class="eval-section">
+              <h4 class="eval-section-title">
+                <span class="status-icon info">+</span>
+                Suggested New Tasks
+              </h4>
+              <div id="suggestedTasks" class="eval-items"></div>
+            </div>
+
+            <div class="eval-summary" id="evalSummary"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 3: Easy Insights -->
+      <div class="tab-content" id="tab-insights">
+        <div class="tab-panel">
+          <div class="tab-intro">
+            <h3>📊 Easy Insights</h3>
+            <p>Get personalized validation for all work items assigned to a specific user.</p>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Assigned User Name</label>
+            <div class="input-row">
+              <input type="text" id="insightUserName" class="form-input" placeholder="e.g., John Doe or john.doe@company.com" />
+              <button class="btn btn-secondary" id="fetchUserWorkItems">
+                <span>Fetch</span>
+              </button>
+            </div>
+            <p class="form-hint">Enter the display name or email of the user</p>
+          </div>
+
+          <button class="btn btn-primary btn-lg" id="analyzeInsights">
+            <span class="btn-icon">🔍</span>
+            <span>Analyze Work Items</span>
+          </button>
+
+          <!-- Loading State -->
+          <div id="insightsLoading" class="loading-state hidden">
+            <div class="spinner"></div>
+            <p>Fetching and validating work items...</p>
+          </div>
+
+          <!-- Insights Summary -->
+          <div id="insightsSummary" class="insights-summary hidden">
+            <div class="summary-cards">
+              <div class="summary-card features">
+                <span class="summary-icon">🎯</span>
+                <div class="summary-data">
+                  <span class="summary-count" id="featureCount">0</span>
+                  <span class="summary-label">Features</span>
+                </div>
+              </div>
+              <div class="summary-card stories">
+                <span class="summary-icon">📖</span>
+                <div class="summary-data">
+                  <span class="summary-count" id="storyCount">0</span>
+                  <span class="summary-label">User Stories</span>
+                </div>
+              </div>
+              <div class="summary-card tasks">
+                <span class="summary-icon">✅</span>
+                <div class="summary-data">
+                  <span class="summary-count" id="taskCountInsights">0</span>
+                  <span class="summary-label">Tasks</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Insights Results -->
+          <div id="insightsResults" class="insights-results hidden">
+            <!-- Features Section -->
+            <div class="insights-section" id="featuresSection">
+              <div class="insights-section-header">
+                <h4><span class="type-badge feature">Feature</span> Validation</h4>
+                <span class="section-stats" id="featureStats"></span>
+              </div>
+              <div class="insights-items" id="featureInsights"></div>
+            </div>
+
+            <!-- User Stories Section -->
+            <div class="insights-section" id="storiesSection">
+              <div class="insights-section-header">
+                <h4><span class="type-badge story">User Story</span> Validation</h4>
+                <span class="section-stats" id="storyStats"></span>
+              </div>
+              <div class="insights-items" id="storyInsights"></div>
+            </div>
+
+            <!-- Tasks Section -->
+            <div class="insights-section" id="tasksInsightsSection">
+              <div class="insights-section-header">
+                <h4><span class="type-badge task">Task</span> Validation</h4>
+                <span class="section-stats" id="taskStats"></span>
+              </div>
+              <div class="insights-items" id="taskInsights"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Result Message -->
+    <div id="result" class="result-message hidden"></div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay hidden" id="settingsModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>⚙️ Settings</h3>
+          <button class="modal-close" id="closeSettings">&times;</button>
+        </div>
+        <div class="modal-body">
+          <!-- Security Notice -->
+          <div class="security-notice">
+            <div class="security-header">
+              <span class="security-icon">🔒</span>
+              <span>Security Information</span>
+            </div>
+            <ul class="security-points">
+              <li>✓ Your credentials are stored <strong>only on your device</strong></li>
+              <li>✓ PAT is sent <strong>only to Azure DevOps APIs</strong> (Microsoft)</li>
+              <li>✓ <strong>No data is sent</strong> to any third-party servers</li>
+              <li>✓ API Key is sent <strong>only to Groq AI</strong> for task analysis</li>
+            </ul>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Organization Name</label>
+            <input type="text" id="org" class="form-input" placeholder="e.g., mycompany" />
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">Project Name</label>
+            <input type="text" id="project" class="form-input" placeholder="e.g., MyProject" />
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">Azure DevOps PAT</label>
+            <div class="input-row">
+              <input type="password" id="pat" class="form-input" placeholder="Personal Access Token" />
+              <button class="btn btn-icon-only" id="togglePatVisibility" title="Show/Hide">👁</button>
+            </div>
+            <p class="form-hint">Requires Work Items Read/Write permissions</p>
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label">Groq API Key</label>
+            <div class="input-row">
+              <input type="password" id="groq" class="form-input" placeholder="Groq API Key (free)" />
+              <button class="btn btn-icon-only" id="toggleGroqVisibility" title="Show/Hide">👁</button>
+            </div>
+            <p class="form-hint">Get free API key at <a href="https://console.groq.com" target="_blank">console.groq.com</a></p>
+          </div>
+
+          <!-- Storage Options -->
+          <div class="form-group">
+            <div class="checkbox-row">
+              <input type="checkbox" id="rememberCredentials" checked />
+              <label for="rememberCredentials">Remember credentials on this device</label>
+            </div>
+            <p class="form-hint">Uncheck to enter credentials each session (more secure)</p>
+          </div>
+
+          <div class="modal-actions">
+            <button class="btn btn-secondary" id="testConnection">Test Connection</button>
+            <button class="btn btn-primary" id="saveSettings">Save Settings</button>
+          </div>
+          
+          <div class="modal-actions-secondary">
+            <button class="btn btn-ghost btn-danger" id="clearAllData">🗑️ Clear All Stored Data</button>
+          </div>
+
+          <div id="connectionStatus" class="connection-status hidden"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
