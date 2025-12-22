@@ -562,13 +562,20 @@ INSTRUCTIONS:
 2. Each User Story should be independently deliverable
 3. Include clear acceptance criteria in the description
 4. Follow the format: "As a [user], I want [feature], so that [benefit]"
+5. Assign Story Points using ONLY Fibonacci sequence: 1, 2, 3, 5, 8, 13
+   - 1 point: Very simple, trivial change
+   - 2 points: Simple, straightforward task
+   - 3 points: Medium complexity, some uncertainty
+   - 5 points: Complex, requires significant effort
+   - 8 points: Very complex, high uncertainty
+   - 13 points: Extremely complex, consider breaking down
 
 RESPOND WITH ONLY A VALID JSON ARRAY:
 [
   {
     "title": "Clear User Story title",
     "description": "As a [user], I want [feature], so that [benefit].\n\nAcceptance Criteria:\n- Criteria 1\n- Criteria 2",
-    "hours": number (story points estimate 1-13),
+    "storyPoints": number (ONLY use 1, 2, 3, 5, 8, or 13),
     "priority": 1 | 2 | 3 | 4,
     "activity": "Development" | "Testing" | "Design" | "Documentation" | "Deployment" | "Requirements"
   }
@@ -660,11 +667,13 @@ function displayTasks() {
   
   list.innerHTML = generatedTasks.map((task) => {
     const priorityNum = task.priority || 2;
+    // Use storyPoints for User Stories, hours for Tasks
+    const estimate = isFeature ? (task.storyPoints || task.hours || 3) : (task.hours || 4);
     return `
     <div class="task-card" data-id="${task.id}">
       <div class="task-header">
         <span class="task-number">${itemLabel} ${task.id}</span>
-        <span class="task-estimate">${task.hours}${estimateLabel}</span>
+        <span class="task-estimate">${estimate}${estimateLabel}</span>
       </div>
       
       <div class="task-meta">
@@ -684,7 +693,7 @@ function displayTasks() {
         <input type="text" class="edit-title" value="${escapeHtml(task.title)}" placeholder="${itemLabel} title">
         <textarea class="edit-description" rows="3" placeholder="Description">${escapeHtml(task.description)}</textarea>
         <div class="edit-row">
-          <input type="number" class="edit-hours" value="${task.hours}" min="0.5" step="0.5" placeholder="${isFeature ? 'Story Points' : 'Hours'}">
+          <input type="number" class="edit-hours" value="${estimate}" min="${isFeature ? '1' : '0.5'}" step="${isFeature ? '1' : '0.5'}" placeholder="${isFeature ? 'Story Points' : 'Hours'}">
           <select class="edit-priority">
             ${[1,2,3,4].map(p => `<option value="${p}" ${priorityNum === p ? 'selected' : ''}>${priorityLabels[p]}</option>`).join('')}
           </select>
@@ -724,7 +733,19 @@ function toggleEdit(id) {
     const task = generatedTasks.find(t => t.id === id);
     task.title = card.querySelector('.edit-title').value;
     task.description = card.querySelector('.edit-description').value;
-    task.hours = parseFloat(card.querySelector('.edit-hours').value) || task.hours;
+    const editValue = parseFloat(card.querySelector('.edit-hours').value) || 4;
+    
+    // For User Stories (from Feature), save as storyPoints; for Tasks, save as hours
+    const isFeature = selectedWorkItemType === 'Feature';
+    if (isFeature) {
+      // Validate Fibonacci sequence and use nearest valid value
+      const fibSequence = [1, 2, 3, 5, 8, 13];
+      task.storyPoints = fibSequence.includes(editValue) ? editValue : 
+        fibSequence.reduce((prev, curr) => Math.abs(curr - editValue) < Math.abs(prev - editValue) ? curr : prev);
+    } else {
+      task.hours = editValue;
+    }
+    
     task.priority = parseInt(card.querySelector('.edit-priority').value) || 2;
     const activitySelect = card.querySelector('.edit-activity');
     if (activitySelect) {
@@ -747,19 +768,23 @@ function removeTask(id) {
 // Update total estimate
 function updateTotalEstimate() {
   const selectedTasks = generatedTasks.filter(t => t.selected);
-  const totalHours = selectedTasks.reduce((sum, t) => sum + t.hours, 0);
   
   // Determine item type based on selected work item type
   const isFeature = selectedWorkItemType === 'Feature';
   const itemLabelPlural = isFeature ? 'user stories' : 'tasks';
   const estimateLabel = isFeature ? 'Story Points' : 'hours';
   
+  // Calculate total - use storyPoints for User Stories, hours for Tasks
+  const total = selectedTasks.reduce((sum, t) => {
+    return sum + (isFeature ? (t.storyPoints || t.hours || 0) : (t.hours || 0));
+  }, 0);
+  
   let estimateDisplay = '';
   if (isFeature) {
-    estimateDisplay = `${totalHours} ${estimateLabel}`;
+    estimateDisplay = `${total} ${estimateLabel}`;
   } else {
-    const days = Math.ceil(totalHours / 6);
-    estimateDisplay = `${totalHours}h (~${days} days)`;
+    const days = Math.ceil(total / 6);
+    estimateDisplay = `${total}h (~${days} days)`;
   }
   
   document.getElementById('totalEstimate').innerHTML = `
@@ -804,8 +829,9 @@ async function createAllTasksInADO() {
         
         // Add type-specific fields
         if (isFeature) {
-          // For User Stories: use Story Points instead of hours
-          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.StoryPoints", "value": task.hours });
+          // For User Stories: use Story Points (Fibonacci: 1,2,3,5,8,13)
+          const storyPoints = task.storyPoints || task.hours || 3;
+          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.StoryPoints", "value": storyPoints });
         } else {
           // For Tasks: use time estimates
           body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.OriginalEstimate", "value": task.hours });
@@ -1082,7 +1108,7 @@ ANALYZE AND RESPOND WITH ONLY THIS JSON STRUCTURE:
     { "id": number, "title": "string", "reason": "why to delete (duplicate, out of scope, etc.)" }
   ],
   "newItems": [
-    { "title": "string", "description": "As a [user], I want [feature], so that [benefit]. Acceptance Criteria: ...", "storyPoints": number, "reason": "why needed" }
+    { "title": "string", "description": "As a [user], I want [feature], so that [benefit]. Acceptance Criteria: ...", "storyPoints": number (ONLY use Fibonacci: 1, 2, 3, 5, 8, or 13), "reason": "why needed" }
   ],
   "summary": "Overall assessment in 1-2 sentences"
 }`
