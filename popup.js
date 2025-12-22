@@ -9,11 +9,28 @@ let iterationPath = null;
 let assignedTo = null;
 let areaPath = null;
 let selectedWorkItemType = 'User Story';
+let selectedAIProvider = 'groq'; // Default AI provider
 
 // Evaluate tab state
 let currentEvaluation = null;
 let currentEvalStoryId = null;
 let currentEvalStoryData = null;
+
+// AI Provider configurations
+const AI_PROVIDERS = {
+  groq: {
+    name: 'Groq',
+    model: 'llama-3.1-8b-instant',
+    endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+    description: 'Free and fast, uses Llama 3.1'
+  },
+  openai: {
+    name: 'OpenAI',
+    model: 'gpt-4o-mini',
+    endpoint: 'https://api.openai.com/v1/chat/completions',
+    description: 'Paid, more advanced capabilities'
+  }
+};
 
 // Experience level multipliers and descriptions
 const EXPERIENCE_CONFIG = {
@@ -135,7 +152,29 @@ function setupEventListeners() {
   // Security controls
   document.getElementById('togglePatVisibility').onclick = () => togglePasswordVisibility('pat');
   document.getElementById('toggleGroqVisibility').onclick = () => togglePasswordVisibility('groq');
+  document.getElementById('toggleOpenaiVisibility').onclick = () => togglePasswordVisibility('openaiKey');
+  document.getElementById('aiProvider').onchange = handleAIProviderChange;
   document.getElementById('clearAllData').onclick = clearAllStoredData;
+}
+
+// Handle AI provider change
+function handleAIProviderChange() {
+  const provider = document.getElementById('aiProvider').value;
+  selectedAIProvider = provider;
+  
+  const groqGroup = document.getElementById('groqKeyGroup');
+  const openaiGroup = document.getElementById('openaiKeyGroup');
+  const hintEl = document.getElementById('aiProviderHint');
+  
+  if (provider === 'groq') {
+    groqGroup.classList.remove('hidden');
+    openaiGroup.classList.add('hidden');
+    hintEl.textContent = '🆓 Groq is free and fast. Great for everyday use!';
+  } else if (provider === 'openai') {
+    groqGroup.classList.add('hidden');
+    openaiGroup.classList.remove('hidden');
+    hintEl.textContent = '💎 OpenAI GPT-4o-mini offers advanced capabilities.';
+  }
 }
 
 // Toggle password visibility
@@ -209,7 +248,8 @@ function closeSettingsModal() {
     // Keep in session memory but will be cleared on popup close
     sessionCredentials = {
       pat: document.getElementById('pat').value,
-      groqKey: document.getElementById('groq').value
+      groqKey: document.getElementById('groq').value,
+      openaiKey: document.getElementById('openaiKey').value
     };
   }
 }
@@ -217,7 +257,8 @@ function closeSettingsModal() {
 // Session-only credentials (not persisted)
 let sessionCredentials = {
   pat: null,
-  groqKey: null
+  groqKey: null,
+  openaiKey: null
 };
 
 // Load remember preference
@@ -237,19 +278,28 @@ function loadRememberPreference() {
 // Load saved settings from chrome storage
 function loadSettings() {
   if (typeof chrome !== 'undefined' && chrome.storage) {
-    chrome.storage.local.get(['org', 'project', 'pat', 'groqKey', 'rememberCredentials'], (data) => {
+    chrome.storage.local.get(['org', 'project', 'pat', 'groqKey', 'openaiKey', 'rememberCredentials', 'aiProvider'], (data) => {
       if (data.org) document.getElementById('org').value = data.org;
       if (data.project) document.getElementById('project').value = data.project;
+      
+      // Load AI provider
+      if (data.aiProvider) {
+        document.getElementById('aiProvider').value = data.aiProvider;
+        selectedAIProvider = data.aiProvider;
+        handleAIProviderChange(); // Update UI
+      }
       
       // Only load sensitive data if "remember" was enabled
       if (data.rememberCredentials !== false) {
         if (data.pat) document.getElementById('pat').value = data.pat;
         if (data.groqKey) document.getElementById('groq').value = data.groqKey;
+        if (data.openaiKey) document.getElementById('openaiKey').value = data.openaiKey;
       }
       
       // Also check session credentials
       if (sessionCredentials.pat) document.getElementById('pat').value = sessionCredentials.pat;
       if (sessionCredentials.groqKey) document.getElementById('groq').value = sessionCredentials.groqKey;
+      if (sessionCredentials.openaiKey) document.getElementById('openaiKey').value = sessionCredentials.openaiKey;
     });
   }
 }
@@ -257,26 +307,33 @@ function loadSettings() {
 // Save settings to chrome storage
 function saveSettings() {
   const remember = document.getElementById('rememberCredentials').checked;
+  const aiProvider = document.getElementById('aiProvider').value;
   
   const settings = {
     org: document.getElementById('org').value,
     project: document.getElementById('project').value,
-    rememberCredentials: remember
+    rememberCredentials: remember,
+    aiProvider: aiProvider
   };
+  
+  // Update global provider
+  selectedAIProvider = aiProvider;
   
   // Only save sensitive data if "remember" is checked
   if (remember) {
     settings.pat = document.getElementById('pat').value;
     settings.groqKey = document.getElementById('groq').value;
+    settings.openaiKey = document.getElementById('openaiKey').value;
   } else {
     // Store in session only
     sessionCredentials = {
       pat: document.getElementById('pat').value,
-      groqKey: document.getElementById('groq').value
+      groqKey: document.getElementById('groq').value,
+      openaiKey: document.getElementById('openaiKey').value
     };
     // Clear from persistent storage
     if (typeof chrome !== 'undefined' && chrome.storage) {
-      chrome.storage.local.remove(['pat', 'groqKey']);
+      chrome.storage.local.remove(['pat', 'groqKey', 'openaiKey']);
     }
   }
   
@@ -301,10 +358,16 @@ function clearAllStoredData() {
         document.getElementById('project').value = '';
         document.getElementById('pat').value = '';
         document.getElementById('groq').value = '';
+        document.getElementById('openaiKey').value = '';
+        document.getElementById('aiProvider').value = 'groq';
         document.getElementById('rememberCredentials').checked = true;
         
+        // Reset AI provider
+        selectedAIProvider = 'groq';
+        handleAIProviderChange();
+        
         // Clear session
-        sessionCredentials = { pat: null, groqKey: null };
+        sessionCredentials = { pat: null, groqKey: null, openaiKey: null };
         
         showResult('All stored data cleared!', 'success');
       });
@@ -516,10 +579,10 @@ async function fetchWorkItem() {
   }
 }
 
-// Generate tasks using Groq AI
+// Generate tasks using AI
 async function generateTasks() {
   const { org, project, pat } = getSettings();
-  const groqKey = document.getElementById('groq').value;
+  const aiApiKey = getAIApiKey();
   const title = document.getElementById('workItemTitle').value;
   const description = document.getElementById('workItemDescription').value;
   const level = document.getElementById('level').value;
@@ -533,8 +596,9 @@ async function generateTasks() {
     return;
   }
   
-  if (!groqKey) {
-    showResult('Please enter your Groq API Key in Settings', 'error');
+  if (!aiApiKey) {
+    const providerName = AI_PROVIDERS[selectedAIProvider].name;
+    showResult(`Please enter your ${providerName} API Key in Settings`, 'error');
     return;
   }
   
@@ -556,14 +620,15 @@ async function generateTasks() {
   }
   
   try {
-    showLoading('createLoading', true, 'AI is analyzing and breaking down the work item...');
+    const providerName = AI_PROVIDERS[selectedAIProvider].name;
+    showLoading('createLoading', true, `${providerName} AI is analyzing and breaking down the work item...`);
     
     const experienceContext = EXPERIENCE_CONFIG[level].promptContext;
     const multiplier = EXPERIENCE_CONFIG[level].multiplier;
     const totalHoursAvailable = daysToComplete * 6;
     const hoursForAI = Math.floor(totalHoursAvailable / multiplier);
     
-    const tasks = await callGroqAI(userStory, experienceContext, groqKey, hoursForAI, totalHoursAvailable);
+    const tasks = await callAI(userStory, experienceContext, aiApiKey, hoursForAI, totalHoursAvailable);
     
     const validActivities = ['Deployment', 'Design', 'Development', 'Documentation', 'Requirements', 'Testing'];
     
@@ -585,8 +650,8 @@ async function generateTasks() {
   }
 }
 
-// Call Groq AI API
-async function callGroqAI(userStory, experienceContext, apiKey, hoursForAI, totalHoursAvailable) {
+// Call AI API (supports Groq and OpenAI)
+async function callAI(userStory, experienceContext, apiKey, hoursForAI, totalHoursAvailable) {
   // Determine what to generate based on selected work item type
   const isFeature = selectedWorkItemType === 'Feature';
   const itemToGenerate = isFeature ? 'User Stories' : 'Tasks';
@@ -655,14 +720,17 @@ RESPOND WITH ONLY A VALID JSON ARRAY:
   }
 ]`;
 
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  // Get the appropriate API key and provider config
+  const provider = AI_PROVIDERS[selectedAIProvider];
+  
+  const response = await fetch(provider.endpoint, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: "llama-3.1-8b-instant",
+      model: provider.model,
       messages: [
         { role: "system", content: "You output only valid JSON arrays. No markdown, no explanations." },
         { role: "user", content: prompt }
@@ -975,7 +1043,7 @@ function selectEvalWorkItemType(type) {
 
 async function fetchAndEvaluate() {
   const { org, project, pat } = getSettings();
-  const groqKey = document.getElementById('groq').value;
+  const aiApiKey = getAIApiKey();
   const workItemId = document.getElementById('evalStoryId').value.trim();
   
   if (!org || !project || !pat) {
@@ -988,8 +1056,9 @@ async function fetchAndEvaluate() {
     return;
   }
   
-  if (!groqKey) {
-    showResult('Please configure Groq API Key in Settings', 'error');
+  if (!aiApiKey) {
+    const providerName = AI_PROVIDERS[selectedAIProvider].name;
+    showResult(`Please configure ${providerName} API Key in Settings`, 'error');
     return;
   }
   
@@ -1054,13 +1123,14 @@ async function fetchAndEvaluate() {
     }
     
     // Evaluate with AI
-    showLoading('evaluateLoading', true, 'AI is analyzing items...');
+    const providerName = AI_PROVIDERS[selectedAIProvider].name;
+    showLoading('evaluateLoading', true, `${providerName} AI is analyzing items...`);
     
     const evaluation = await evaluateChildItemsWithAI(
       workItemTitle, 
       workItemDescription + '\n\n' + acceptanceCriteria, 
       childItems, 
-      groqKey, 
+      aiApiKey, 
       selectedEvalWorkItemType
     );
     
@@ -1185,14 +1255,17 @@ ANALYZE AND RESPOND WITH ONLY THIS JSON STRUCTURE:
   "summary": "Overall assessment in 1-2 sentences"
 }`;
 
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  // Get the appropriate provider config
+  const provider = AI_PROVIDERS[selectedAIProvider];
+
+  const response = await fetch(provider.endpoint, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: "llama-3.1-8b-instant",
+      model: provider.model,
       messages: [
         { role: "system", content: "You output only valid JSON. No markdown, no explanations." },
         { role: "user", content: prompt }
@@ -2106,6 +2179,14 @@ function getSettings() {
   };
 }
 
+// Get the appropriate AI API key based on selected provider
+function getAIApiKey() {
+  if (selectedAIProvider === 'openai') {
+    return document.getElementById('openaiKey').value.trim();
+  }
+  return document.getElementById('groq').value.trim();
+}
+
 function stripHtml(html) {
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
@@ -2238,7 +2319,7 @@ async function forceGenerateTasks() {
   document.getElementById('tasksSection').classList.add('hidden');
   
   // Call the original generate logic but skip the check
-  const groqKey = document.getElementById('groq').value;
+  const aiApiKey = getAIApiKey();
   const title = document.getElementById('workItemTitle').value;
   const description = document.getElementById('workItemDescription').value;
   const level = document.getElementById('level').value;
@@ -2247,14 +2328,15 @@ async function forceGenerateTasks() {
   const userStory = `Title: ${title}\n\n${description}`;
   
   try {
-    showLoading('createLoading', true, 'AI is analyzing and breaking down the work item...');
+    const providerName = AI_PROVIDERS[selectedAIProvider].name;
+    showLoading('createLoading', true, `${providerName} AI is analyzing and breaking down the work item...`);
     
     const experienceContext = EXPERIENCE_CONFIG[level].promptContext;
     const multiplier = EXPERIENCE_CONFIG[level].multiplier;
     const totalHoursAvailable = daysToComplete * 6;
     const hoursForAI = Math.floor(totalHoursAvailable / multiplier);
     
-    const tasks = await callGroqAI(userStory, experienceContext, groqKey, hoursForAI, totalHoursAvailable);
+    const tasks = await callAI(userStory, experienceContext, aiApiKey, hoursForAI, totalHoursAvailable);
     
     const validActivities = ['Deployment', 'Design', 'Development', 'Documentation', 'Requirements', 'Testing'];
     
