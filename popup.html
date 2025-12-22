@@ -54,11 +54,8 @@
                 <span class="type-icon">📖</span>
                 <span>User Story</span>
               </button>
-              <button class="type-btn" data-type="Task">
-                <span class="type-icon">✅</span>
-                <span>Task</span>
-              </button>
             </div>
+            <p class="form-hint" id="workItemTypeHint">User Story → Creates Tasks | Feature → Creates User Stories (max 3)</p>
           </div>
 
           <!-- User Story Input -->
@@ -127,7 +124,7 @@
           <!-- Action Button -->
           <button class="btn btn-primary btn-lg" id="generateTasks">
             <span class="btn-icon">✨</span>
-            <span>Generate Tasks with AI</span>
+            <span id="generateBtnText">Generate Tasks with AI</span>
           </button>
 
           <!-- Loading State -->
@@ -165,37 +162,56 @@
       <div class="tab-content" id="tab-evaluate">
         <div class="tab-panel">
           <div class="tab-intro">
-            <h3>📋 Evaluate Tasks</h3>
-            <p>Validate if all tasks under a User Story are complete, correct, and well-estimated.</p>
+            <h3>📋 Evaluate Work Items</h3>
+            <p>Validate if all child items under a Feature or User Story are complete, correct, and well-estimated.</p>
+          </div>
+
+          <!-- Work Item Type Selection -->
+          <div class="form-group">
+            <label class="form-label">Work Item Type</label>
+            <div class="type-selector">
+              <button class="type-btn" data-eval-type="Feature" id="evalTypeFeature">
+                <span class="type-icon">🎯</span>
+                <span>Feature</span>
+              </button>
+              <button class="type-btn active" data-eval-type="User Story" id="evalTypeUserStory">
+                <span class="type-icon">📖</span>
+                <span>User Story</span>
+              </button>
+            </div>
+            <p class="form-hint" id="evalTypeHint">User Story → Evaluates Tasks | Feature → Evaluates User Stories</p>
           </div>
 
           <div class="form-group">
-            <label class="form-label">User Story Title</label>
-            <input type="text" id="evalStoryTitle" class="form-input" placeholder="Enter user story title..." />
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">User Story Description</label>
-            <textarea id="evalStoryDescription" class="form-textarea" rows="4" placeholder="Paste the user story description and acceptance criteria..."></textarea>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">User Story ID (for fetching linked tasks)</label>
+            <label class="form-label">Work Item ID</label>
             <div class="input-row">
               <input type="text" id="evalStoryId" class="form-input" placeholder="e.g., 12345" />
-              <button class="btn btn-secondary" id="fetchEvalStory">Fetch Story</button>
+              <button class="btn btn-secondary" id="fetchEvalStory">Fetch & Evaluate</button>
             </div>
           </div>
 
-          <button class="btn btn-primary btn-lg" id="evaluateTasks">
-            <span class="btn-icon">🔍</span>
-            <span>Analyze & Evaluate Tasks</span>
-          </button>
+          <!-- Work Item Info Display -->
+          <div id="evalWorkItemInfo" class="info-cards hidden">
+            <div class="info-card">
+              <span class="info-icon">📝</span>
+              <div class="info-content">
+                <span class="info-label">Title</span>
+                <span class="info-value" id="evalWorkItemTitle">-</span>
+              </div>
+            </div>
+            <div class="info-card">
+              <span class="info-icon">📊</span>
+              <div class="info-content">
+                <span class="info-label">Child Items</span>
+                <span class="info-value" id="evalChildCount">-</span>
+              </div>
+            </div>
+          </div>
 
           <!-- Loading State -->
           <div id="evaluateLoading" class="loading-state hidden">
             <div class="spinner"></div>
-            <p>Fetching and analyzing linked tasks...</p>
+            <p>Fetching and analyzing linked items...</p>
           </div>
 
           <!-- Evaluation Results -->
@@ -250,16 +266,41 @@
             <div class="input-row">
               <input type="text" id="insightUserName" class="form-input" placeholder="e.g., John Doe or john.doe@company.com" />
               <button class="btn btn-secondary" id="fetchUserWorkItems">
-                <span>Fetch</span>
+                <span>🔍 Search</span>
               </button>
             </div>
             <p class="form-hint">Enter the display name or email of the user</p>
           </div>
 
-          <button class="btn btn-primary btn-lg" id="analyzeInsights">
-            <span class="btn-icon">🔍</span>
-            <span>Analyze Work Items</span>
-          </button>
+          <!-- Filters Section (hidden until search) -->
+          <div id="insightFilters" class="filters-section hidden">
+            <div class="filters-row">
+              <div class="form-group filter-group">
+                <label class="form-label">Project</label>
+                <select id="filterProject" class="form-select">
+                  <option value="">All Projects</option>
+                </select>
+              </div>
+              <div class="form-group filter-group">
+                <label class="form-label">Sprint/Iteration</label>
+                <select id="filterSprint" class="form-select">
+                  <option value="">All Sprints</option>
+                </select>
+              </div>
+              <div class="form-group filter-group">
+                <label class="form-label">Work Item Type</label>
+                <select id="filterWorkItemType" class="form-select">
+                  <option value="">All Types</option>
+                  <option value="Feature">Feature</option>
+                  <option value="User Story">User Story</option>
+                  <option value="Task">Task</option>
+                </select>
+              </div>
+            </div>
+            <button class="btn btn-secondary" id="applyFilters">
+              <span>🔄 Apply Filters</span>
+            </button>
+          </div>
 
           <!-- Loading State -->
           <div id="insightsLoading" class="loading-state hidden">
@@ -291,6 +332,22 @@
                   <span class="summary-label">Tasks</span>
                 </div>
               </div>
+              <div class="summary-card incomplete">
+                <span class="summary-icon">⚠️</span>
+                <div class="summary-data">
+                  <span class="summary-count" id="incompleteCount">0</span>
+                  <span class="summary-label">Incomplete</span>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Auto-fix button -->
+            <div class="auto-fix-section" id="autoFixSection">
+              <button class="btn btn-success btn-lg" id="autoFixAll">
+                <span class="btn-icon">🔧</span>
+                <span>Auto-Fill All Incomplete Fields</span>
+              </button>
+              <p class="form-hint">AI will suggest and apply valid values for all missing fields</p>
             </div>
           </div>
 

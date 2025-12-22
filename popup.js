@@ -10,6 +10,11 @@ let assignedTo = null;
 let areaPath = null;
 let selectedWorkItemType = 'User Story';
 
+// Evaluate tab state
+let currentEvaluation = null;
+let currentEvalStoryId = null;
+let currentEvalStoryData = null;
+
 // Experience level multipliers and descriptions
 const EXPERIENCE_CONFIG = {
   fresher: {
@@ -108,8 +113,9 @@ function setupEventListeners() {
   document.getElementById('tasksList').addEventListener('change', handleTaskCheckboxChange);
   
   // Tab 2: Evaluate Tasks
-  document.getElementById('fetchEvalStory').onclick = fetchEvalStory;
-  document.getElementById('evaluateTasks').onclick = evaluateTasks;
+  document.getElementById('fetchEvalStory').onclick = fetchAndEvaluate;
+  document.getElementById('evalTypeFeature').onclick = () => selectEvalWorkItemType('Feature');
+  document.getElementById('evalTypeUserStory').onclick = () => selectEvalWorkItemType('User Story');
   
   // Event delegation for dynamically created buttons in Evaluate tab
   document.getElementById('evaluationResults').addEventListener('click', handleEvaluationClick);
@@ -117,7 +123,11 @@ function setupEventListeners() {
   
   // Tab 3: Insights
   document.getElementById('fetchUserWorkItems').onclick = fetchUserWorkItems;
-  document.getElementById('analyzeInsights').onclick = analyzeInsights;
+  document.getElementById('applyFilters').onclick = applyInsightFilters;
+  document.getElementById('autoFixAll').onclick = autoFixAllIncomplete;
+  
+  // Event delegation for insights results
+  document.getElementById('insightsResults').addEventListener('click', handleInsightsClick);
   
   // Security controls
   document.getElementById('togglePatVisibility').onclick = () => togglePasswordVisibility('pat');
@@ -142,6 +152,10 @@ function handleEvaluationClick(e) {
     createSuggestedTask(index);
   } else if (target.dataset.action === 'createAllTasks') {
     createAllSuggestedTasks();
+  } else if (target.dataset.action === 'deleteItem') {
+    const id = parseInt(target.dataset.id, 10);
+    const index = parseInt(target.dataset.index, 10);
+    deleteWorkItemFromADO(id, index);
   }
 }
 
@@ -364,6 +378,24 @@ function selectWorkItemType(btn) {
   document.querySelectorAll('.type-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   selectedWorkItemType = btn.dataset.type;
+  
+  // Update hint text based on selection
+  const hintEl = document.getElementById('workItemTypeHint');
+  if (hintEl) {
+    if (selectedWorkItemType === 'Feature') {
+      hintEl.textContent = 'Feature → Creates User Stories (max 3)';
+    } else {
+      hintEl.textContent = 'User Story → Creates Tasks';
+    }
+  }
+  
+  // Update button text
+  const generateBtnText = document.getElementById('generateBtnText');
+  if (generateBtnText) {
+    generateBtnText.textContent = selectedWorkItemType === 'Feature' 
+      ? 'Generate User Story with AI' 
+      : 'Generate Tasks with AI';
+  }
 }
 
 // Update experience info display
@@ -508,7 +540,40 @@ async function generateTasks() {
 
 // Call Groq AI API
 async function callGroqAI(userStory, experienceContext, apiKey, hoursForAI, totalHoursAvailable) {
-  const prompt = `You are an expert Agile project manager. Break down the following work item into detailed, actionable development tasks.
+  // Determine what to generate based on selected work item type
+  const isFeature = selectedWorkItemType === 'Feature';
+  const itemToGenerate = isFeature ? 'User Stories' : 'Tasks';
+  const maxItems = isFeature ? 3 : 5;
+  const itemDescription = isFeature 
+    ? 'User Stories with clear acceptance criteria' 
+    : 'development tasks';
+  
+  const prompt = isFeature 
+    ? `You are an expert Agile project manager. Break down the following Feature into User Stories.
+
+FEATURE:
+${userStory}
+
+DEVELOPER CONTEXT:
+User Stories will be assigned to ${experienceContext}.
+
+INSTRUCTIONS:
+1. Break down into 1-3 specific, actionable User Stories (MAXIMUM 3)
+2. Each User Story should be independently deliverable
+3. Include clear acceptance criteria in the description
+4. Follow the format: "As a [user], I want [feature], so that [benefit]"
+
+RESPOND WITH ONLY A VALID JSON ARRAY:
+[
+  {
+    "title": "Clear User Story title",
+    "description": "As a [user], I want [feature], so that [benefit].\n\nAcceptance Criteria:\n- Criteria 1\n- Criteria 2",
+    "hours": number (story points estimate 1-13),
+    "priority": 1 | 2 | 3 | 4,
+    "activity": "Development" | "Testing" | "Design" | "Documentation" | "Deployment" | "Requirements"
+  }
+]`
+    : `You are an expert Agile project manager. Break down the following work item into detailed, actionable development tasks.
 
 WORK ITEM:
 ${userStory}
@@ -575,8 +640,20 @@ function displayTasks() {
   const list = document.getElementById('tasksList');
   const countBadge = document.getElementById('taskCount');
   
+  // Determine item type based on selected work item type
+  const isFeature = selectedWorkItemType === 'Feature';
+  const itemLabel = isFeature ? 'User Story' : 'Task';
+  const itemLabelPlural = isFeature ? 'user stories' : 'tasks';
+  const estimateLabel = isFeature ? 'SP' : 'h'; // Story Points vs Hours
+  
   section.classList.remove('hidden');
-  countBadge.textContent = `${generatedTasks.length} tasks`;
+  countBadge.textContent = `${generatedTasks.length} ${itemLabelPlural}`;
+  
+  // Update section header
+  const sectionHeader = section.querySelector('.section-header h3');
+  if (sectionHeader) {
+    sectionHeader.textContent = isFeature ? 'Generated User Stories' : 'Generated Tasks';
+  }
   
   const priorityLabels = { 1: 'Critical', 2: 'High', 3: 'Medium', 4: 'Low' };
   const priorityColors = { 1: '#ef4444', 2: '#f59e0b', 3: '#3b82f6', 4: '#10b981' };
@@ -586,13 +663,13 @@ function displayTasks() {
     return `
     <div class="task-card" data-id="${task.id}">
       <div class="task-header">
-        <span class="task-number">Task ${task.id}</span>
-        <span class="task-estimate">${task.hours}h</span>
+        <span class="task-number">${itemLabel} ${task.id}</span>
+        <span class="task-estimate">${task.hours}${estimateLabel}</span>
       </div>
       
       <div class="task-meta">
         <span class="task-priority" style="background:${priorityColors[priorityNum]}">${priorityLabels[priorityNum]}</span>
-        <span class="task-activity">${task.activity || 'Development'}</span>
+        ${!isFeature ? `<span class="task-activity">${task.activity || 'Development'}</span>` : ''}
       </div>
       
       <div class="task-checkbox">
@@ -604,17 +681,17 @@ function displayTasks() {
       <div class="task-description">${escapeHtml(task.description).replace(/\\n/g, '<br>')}</div>
       
       <div class="edit-fields">
-        <input type="text" class="edit-title" value="${escapeHtml(task.title)}" placeholder="Task title">
+        <input type="text" class="edit-title" value="${escapeHtml(task.title)}" placeholder="${itemLabel} title">
         <textarea class="edit-description" rows="3" placeholder="Description">${escapeHtml(task.description)}</textarea>
         <div class="edit-row">
-          <input type="number" class="edit-hours" value="${task.hours}" min="0.5" step="0.5" placeholder="Hours">
+          <input type="number" class="edit-hours" value="${task.hours}" min="0.5" step="0.5" placeholder="${isFeature ? 'Story Points' : 'Hours'}">
           <select class="edit-priority">
             ${[1,2,3,4].map(p => `<option value="${p}" ${priorityNum === p ? 'selected' : ''}>${priorityLabels[p]}</option>`).join('')}
           </select>
-          <select class="edit-activity">
+          ${!isFeature ? `<select class="edit-activity">
             ${['Deployment','Design','Development','Documentation','Requirements','Testing'].map(a => 
               `<option ${task.activity === a ? 'selected' : ''}>${a}</option>`).join('')}
-          </select>
+          </select>` : ''}
         </div>
       </div>
       
@@ -649,7 +726,10 @@ function toggleEdit(id) {
     task.description = card.querySelector('.edit-description').value;
     task.hours = parseFloat(card.querySelector('.edit-hours').value) || task.hours;
     task.priority = parseInt(card.querySelector('.edit-priority').value) || 2;
-    task.activity = card.querySelector('.edit-activity').value || 'Development';
+    const activitySelect = card.querySelector('.edit-activity');
+    if (activitySelect) {
+      task.activity = activitySelect.value || 'Development';
+    }
     displayTasks();
     return;
   }
@@ -668,15 +748,27 @@ function removeTask(id) {
 function updateTotalEstimate() {
   const selectedTasks = generatedTasks.filter(t => t.selected);
   const totalHours = selectedTasks.reduce((sum, t) => sum + t.hours, 0);
-  const days = Math.ceil(totalHours / 6);
+  
+  // Determine item type based on selected work item type
+  const isFeature = selectedWorkItemType === 'Feature';
+  const itemLabelPlural = isFeature ? 'user stories' : 'tasks';
+  const estimateLabel = isFeature ? 'Story Points' : 'hours';
+  
+  let estimateDisplay = '';
+  if (isFeature) {
+    estimateDisplay = `${totalHours} ${estimateLabel}`;
+  } else {
+    const days = Math.ceil(totalHours / 6);
+    estimateDisplay = `${totalHours}h (~${days} days)`;
+  }
   
   document.getElementById('totalEstimate').innerHTML = `
-    <div class="estimate-label">Total Estimate (${selectedTasks.length} tasks)</div>
-    <div class="estimate-value">${totalHours}h (~${days} days)</div>
+    <div class="estimate-label">Total Estimate (${selectedTasks.length} ${itemLabelPlural})</div>
+    <div class="estimate-value">${estimateDisplay}</div>
   `;
 }
 
-// Create all tasks in ADO
+// Create all items in ADO (Tasks for User Story, User Stories for Feature)
 async function createAllTasksInADO() {
   const { org, project, pat } = getSettings();
   
@@ -687,12 +779,17 @@ async function createAllTasksInADO() {
   
   const selectedTasks = generatedTasks.filter(t => t.selected);
   if (selectedTasks.length === 0) {
-    showResult('No tasks selected', 'error');
+    showResult('No items selected', 'error');
     return;
   }
   
+  // Determine work item type to create based on selected parent type
+  const isFeature = selectedWorkItemType === 'Feature';
+  const workItemTypeToCreate = isFeature ? 'User Story' : 'Task';
+  const itemLabel = isFeature ? 'user stories' : 'tasks';
+  
   try {
-    showLoading('createLoading', true, `Creating ${selectedTasks.length} tasks...`);
+    showLoading('createLoading', true, `Creating ${selectedTasks.length} ${itemLabel}...`);
     
     const auth = btoa(":" + pat);
     let created = 0, failed = 0;
@@ -702,17 +799,26 @@ async function createAllTasksInADO() {
         const body = [
           { "op": "add", "path": "/fields/System.Title", "value": task.title },
           { "op": "add", "path": "/fields/System.Description", "value": task.description.replace(/\\n/g, '<br>') },
-          { "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.OriginalEstimate", "value": task.hours },
-          { "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.RemainingWork", "value": task.hours },
-          { "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.CompletedWork", "value": 0 },
-          { "op": "add", "path": "/fields/Microsoft.VSTS.Common.Priority", "value": task.priority || 2 },
-          { "op": "add", "path": "/fields/Microsoft.VSTS.Common.Activity", "value": task.activity || "Development" }
+          { "op": "add", "path": "/fields/Microsoft.VSTS.Common.Priority", "value": task.priority || 2 }
         ];
+        
+        // Add type-specific fields
+        if (isFeature) {
+          // For User Stories: use Story Points instead of hours
+          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.StoryPoints", "value": task.hours });
+        } else {
+          // For Tasks: use time estimates
+          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.OriginalEstimate", "value": task.hours });
+          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.RemainingWork", "value": task.hours });
+          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.CompletedWork", "value": 0 });
+          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Common.Activity", "value": task.activity || "Development" });
+        }
         
         if (areaPath) body.push({ "op": "add", "path": "/fields/System.AreaPath", "value": areaPath });
         if (assignedTo) body.push({ "op": "add", "path": "/fields/System.AssignedTo", "value": assignedTo.uniqueName || assignedTo.displayName });
         if (iterationPath) body.push({ "op": "add", "path": "/fields/System.IterationPath", "value": iterationPath });
         
+        // Link to parent work item
         if (userStoryData && userStoryData.id) {
           body.push({
             "op": "add",
@@ -722,7 +828,7 @@ async function createAllTasksInADO() {
         }
         
         const response = await fetch(
-          `https://dev.azure.com/${org}/${project}/_apis/wit/workitems/$Task?api-version=7.0`,
+          `https://dev.azure.com/${org}/${project}/_apis/wit/workitems/$${encodeURIComponent(workItemTypeToCreate)}?api-version=7.0`,
           {
             method: "POST",
             headers: {
@@ -743,7 +849,7 @@ async function createAllTasksInADO() {
     showLoading('createLoading', false);
     
     if (failed === 0) {
-      showResult(`✓ Created ${created} tasks in Azure DevOps!`, 'success');
+      showResult(`✓ Created ${created} ${itemLabel} in Azure DevOps!`, 'success');
     } else {
       showResult(`Created ${created}, ${failed} failed`, 'error');
     }
@@ -769,81 +875,43 @@ function clearTasks() {
 }
 
 // ============================================
-// TAB 2: Evaluate Tasks
+// TAB 2: Evaluate Work Items
 // ============================================
 
-async function fetchEvalStory() {
-  const { org, project, pat } = getSettings();
-  const storyId = document.getElementById('evalStoryId').value.trim();
+let selectedEvalWorkItemType = 'User Story';
+
+function selectEvalWorkItemType(type) {
+  selectedEvalWorkItemType = type;
   
-  if (!org || !project || !pat || !storyId) {
-    showResult('Please configure settings and enter Story ID', 'error');
+  // Update button states
+  document.getElementById('evalTypeFeature').classList.toggle('active', type === 'Feature');
+  document.getElementById('evalTypeUserStory').classList.toggle('active', type === 'User Story');
+  
+  // Update hint text
+  const hintEl = document.getElementById('evalTypeHint');
+  if (hintEl) {
+    hintEl.textContent = type === 'Feature' 
+      ? 'Feature → Evaluates User Stories' 
+      : 'User Story → Evaluates Tasks';
+  }
+  
+  // Clear previous results
+  document.getElementById('evaluationResults').classList.add('hidden');
+  document.getElementById('evalWorkItemInfo').classList.add('hidden');
+}
+
+async function fetchAndEvaluate() {
+  const { org, project, pat } = getSettings();
+  const groqKey = document.getElementById('groq').value;
+  const workItemId = document.getElementById('evalStoryId').value.trim();
+  
+  if (!org || !project || !pat) {
+    showResult('Please configure settings first (click ⚙️)', 'error');
     return;
   }
   
-  try {
-    showLoading('evaluateLoading', true, 'Fetching user story...');
-    
-    const auth = btoa(":" + pat);
-    const url = `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems/${storyId}?api-version=7.0`;
-    
-    const response = await fetch(url, {
-      headers: { "Authorization": `Basic ${auth}`, "Content-Type": "application/json" }
-    });
-    
-    if (!response.ok) throw new Error(`Failed to fetch: ${response.status}`);
-    
-    const data = await response.json();
-    
-    document.getElementById('evalStoryTitle').value = data.fields['System.Title'] || '';
-    document.getElementById('evalStoryDescription').value = 
-      `${stripHtml(data.fields['System.Description'] || '')}\n\n${stripHtml(data.fields['Microsoft.VSTS.Common.AcceptanceCriteria'] || '')}`;
-    
-    // Store User Story data for task creation
-    currentEvalStoryData = {
-      iterationPath: data.fields['System.IterationPath'] || null,
-      areaPath: data.fields['System.AreaPath'] || null,
-      assignedTo: data.fields['System.AssignedTo'] || null,
-      plannedStartDate: data.fields['Microsoft.VSTS.Scheduling.StartDate'] || null,
-      plannedEndDate: data.fields['Microsoft.VSTS.Scheduling.FinishDate'] || null,
-      targetDate: data.fields['Microsoft.VSTS.Scheduling.TargetDate'] || null
-    };
-    
-    // Calculate available days if dates exist
-    let dateInfo = '';
-    if (currentEvalStoryData.plannedStartDate && currentEvalStoryData.plannedEndDate) {
-      const start = new Date(currentEvalStoryData.plannedStartDate);
-      const end = new Date(currentEvalStoryData.plannedEndDate);
-      const days = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
-      dateInfo = ` | Timeline: ${days} days (${start.toLocaleDateString()} - ${end.toLocaleDateString()})`;
-    }
-    
-    const assigneeInfo = currentEvalStoryData.assignedTo?.displayName ? ` | Assigned: ${currentEvalStoryData.assignedTo.displayName}` : '';
-    
-    showLoading('evaluateLoading', false);
-    showResult(`Story fetched!${dateInfo}${assigneeInfo} Click "Analyze" to evaluate.`, 'success');
-    
-  } catch (error) {
-    showLoading('evaluateLoading', false);
-    showResult(`Error: ${error.message}`, 'error');
-  }
-}
-
-// Store current evaluation data for saving
-let currentEvaluation = null;
-let currentEvalStoryId = null;
-let currentEvalStoryData = null; // Store User Story dates, iteration, area, assignee
-
-async function evaluateTasks() {
-  const { org, project, pat } = getSettings();
-  const groqKey = document.getElementById('groq').value;
-  const storyId = document.getElementById('evalStoryId').value.trim();
-  const storyTitle = document.getElementById('evalStoryTitle').value.trim();
-  const storyDescription = document.getElementById('evalStoryDescription').value.trim();
-  
-  // Only title is required
-  if (!storyTitle) {
-    showResult('Please enter User Story Title', 'error');
+  if (!workItemId) {
+    showResult('Please enter a Work Item ID', 'error');
     return;
   }
   
@@ -852,36 +920,81 @@ async function evaluateTasks() {
     return;
   }
   
-  // Store story ID for later use
-  currentEvalStoryId = storyId;
+  // Store for later use
+  currentEvalStoryId = workItemId;
   
   try {
-    showLoading('evaluateLoading', true, 'Fetching linked tasks...');
+    showLoading('evaluateLoading', true, 'Fetching work item...');
     
-    let linkedTasks = [];
+    const auth = btoa(":" + pat);
+    const url = `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems/${workItemId}?$expand=relations&api-version=7.0`;
     
-    if (storyId && org && project && pat) {
-      linkedTasks = await fetchLinkedTasks(org, project, pat, storyId);
+    const response = await fetch(url, {
+      headers: { "Authorization": `Basic ${auth}`, "Content-Type": "application/json" }
+    });
+    
+    if (!response.ok) throw new Error(`Failed to fetch: ${response.status}`);
+    
+    const data = await response.json();
+    const workItemType = data.fields['System.WorkItemType'];
+    const workItemTitle = data.fields['System.Title'] || '';
+    const workItemDescription = stripHtml(data.fields['System.Description'] || '');
+    const acceptanceCriteria = stripHtml(data.fields['Microsoft.VSTS.Common.AcceptanceCriteria'] || '');
+    
+    // Validate work item type matches selection
+    if (selectedEvalWorkItemType === 'Feature' && workItemType !== 'Feature') {
+      showLoading('evaluateLoading', false);
+      showResult(`Work Item #${workItemId} is a "${workItemType}", not a Feature. Please select the correct type.`, 'error');
+      return;
+    }
+    if (selectedEvalWorkItemType === 'User Story' && workItemType !== 'User Story') {
+      showLoading('evaluateLoading', false);
+      showResult(`Work Item #${workItemId} is a "${workItemType}", not a User Story. Please select the correct type.`, 'error');
+      return;
     }
     
-    showLoading('evaluateLoading', true, 'AI is analyzing tasks...');
+    // Store work item data
+    currentEvalStoryData = {
+      title: workItemTitle,
+      description: workItemDescription,
+      acceptanceCriteria: acceptanceCriteria,
+      iterationPath: data.fields['System.IterationPath'] || null,
+      areaPath: data.fields['System.AreaPath'] || null,
+      assignedTo: data.fields['System.AssignedTo'] || null,
+      url: data.url
+    };
     
-    // Calculate available hours from User Story dates
-    let availableHours = null;
-    if (currentEvalStoryData?.plannedStartDate && currentEvalStoryData?.plannedEndDate) {
-      const start = new Date(currentEvalStoryData.plannedStartDate);
-      const end = new Date(currentEvalStoryData.plannedEndDate);
-      const days = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
-      availableHours = days * 6; // 6 productive hours per day
+    // Fetch child items
+    showLoading('evaluateLoading', true, `Fetching linked ${selectedEvalWorkItemType === 'Feature' ? 'User Stories' : 'Tasks'}...`);
+    
+    const childItems = await fetchLinkedChildItems(org, project, pat, data, selectedEvalWorkItemType);
+    
+    // Show work item info
+    document.getElementById('evalWorkItemInfo').classList.remove('hidden');
+    document.getElementById('evalWorkItemTitle').textContent = workItemTitle;
+    document.getElementById('evalChildCount').textContent = `${childItems.length} ${selectedEvalWorkItemType === 'Feature' ? 'User Stories' : 'Tasks'}`;
+    
+    if (childItems.length === 0) {
+      showLoading('evaluateLoading', false);
+      showResult(`No ${selectedEvalWorkItemType === 'Feature' ? 'User Stories' : 'Tasks'} found under this ${selectedEvalWorkItemType}`, 'error');
+      return;
     }
     
-    const evaluation = await evaluateWithAI(storyTitle, storyDescription, linkedTasks, groqKey, availableHours);
+    // Evaluate with AI
+    showLoading('evaluateLoading', true, 'AI is analyzing items...');
     
-    // Store evaluation for saving
+    const evaluation = await evaluateChildItemsWithAI(
+      workItemTitle, 
+      workItemDescription + '\n\n' + acceptanceCriteria, 
+      childItems, 
+      groqKey, 
+      selectedEvalWorkItemType
+    );
+    
     currentEvaluation = evaluation;
     
     showLoading('evaluateLoading', false);
-    displayEvaluationResults(evaluation);
+    displayEvaluationResults(evaluation, selectedEvalWorkItemType);
     
   } catch (error) {
     showLoading('evaluateLoading', false);
@@ -889,20 +1002,9 @@ async function evaluateTasks() {
   }
 }
 
-async function fetchLinkedTasks(org, project, pat, storyId) {
+async function fetchLinkedChildItems(org, project, pat, parentData, parentType) {
   const auth = btoa(":" + pat);
-  
-  // First get the work item with relations
-  const url = `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems/${storyId}?$expand=relations&api-version=7.0`;
-  
-  const response = await fetch(url, {
-    headers: { "Authorization": `Basic ${auth}` }
-  });
-  
-  if (!response.ok) return [];
-  
-  const data = await response.json();
-  const relations = data.relations || [];
+  const relations = parentData.relations || [];
   
   // Filter child relations
   const childUrls = relations
@@ -911,55 +1013,87 @@ async function fetchLinkedTasks(org, project, pat, storyId) {
   
   if (childUrls.length === 0) return [];
   
-  // Fetch each child task
-  const tasks = [];
+  const expectedChildType = parentType === 'Feature' ? 'User Story' : 'Task';
+  const items = [];
+  
   for (const url of childUrls) {
     try {
-      const taskResponse = await fetch(url, {
+      const response = await fetch(url, {
         headers: { "Authorization": `Basic ${auth}` }
       });
-      if (taskResponse.ok) {
-        const taskData = await taskResponse.json();
-        if (taskData.fields['System.WorkItemType'] === 'Task') {
-          tasks.push({
-            id: taskData.id,
-            title: taskData.fields['System.Title'],
-            description: stripHtml(taskData.fields['System.Description'] || ''),
-            estimate: taskData.fields['Microsoft.VSTS.Scheduling.OriginalEstimate'] || 0,
-            activity: taskData.fields['Microsoft.VSTS.Common.Activity'] || '',
-            state: taskData.fields['System.State']
-          });
+      if (response.ok) {
+        const itemData = await response.json();
+        if (itemData.fields['System.WorkItemType'] === expectedChildType) {
+          if (expectedChildType === 'User Story') {
+            items.push({
+              id: itemData.id,
+              title: itemData.fields['System.Title'],
+              description: stripHtml(itemData.fields['System.Description'] || ''),
+              acceptanceCriteria: stripHtml(itemData.fields['Microsoft.VSTS.Common.AcceptanceCriteria'] || ''),
+              storyPoints: itemData.fields['Microsoft.VSTS.Scheduling.StoryPoints'] || 0,
+              state: itemData.fields['System.State'],
+              priority: itemData.fields['Microsoft.VSTS.Common.Priority'] || 2
+            });
+          } else {
+            items.push({
+              id: itemData.id,
+              title: itemData.fields['System.Title'],
+              description: stripHtml(itemData.fields['System.Description'] || ''),
+              estimate: itemData.fields['Microsoft.VSTS.Scheduling.OriginalEstimate'] || 0,
+              activity: itemData.fields['Microsoft.VSTS.Common.Activity'] || '',
+              state: itemData.fields['System.State'],
+              priority: itemData.fields['Microsoft.VSTS.Common.Priority'] || 2
+            });
+          }
         }
       }
     } catch (e) {
-      console.error('Error fetching task:', e);
+      console.error('Error fetching child item:', e);
     }
   }
   
-  return tasks;
+  return items;
 }
 
-async function evaluateWithAI(storyTitle, storyDescription, existingTasks, apiKey, availableHours = null) {
-  const tasksJson = JSON.stringify(existingTasks, null, 2);
-  const descText = storyDescription ? `\nDescription: ${storyDescription}` : '';
+async function evaluateChildItemsWithAI(parentTitle, parentDescription, childItems, apiKey, parentType) {
+  const isFeature = parentType === 'Feature';
+  const childType = isFeature ? 'User Stories' : 'Tasks';
+  const itemsJson = JSON.stringify(childItems, null, 2);
   
-  // Calculate existing task hours
-  const existingHours = existingTasks.reduce((sum, t) => sum + (t.estimate || 0), 0);
-  
-  // Time constraint for new tasks
-  let timeConstraint = '';
-  if (availableHours) {
-    const remainingHours = Math.max(0, availableHours - existingHours);
-    timeConstraint = `\n\nTIME CONSTRAINT:\n- Total available hours: ${availableHours}h\n- Existing tasks total: ${existingHours}h\n- Remaining hours for new tasks: ${remainingHours}h\n- NEW TASKS MUST FIT WITHIN ${remainingHours} HOURS TOTAL. Do not suggest tasks if no time remains.`;
-  }
-  
-  const prompt = `You are an expert Agile coach. Evaluate the tasks created for this User Story.
+  const prompt = isFeature 
+    ? `You are an expert Agile coach. Evaluate the User Stories created for this Feature.
+
+FEATURE:
+Title: ${parentTitle}
+Description: ${parentDescription}
+
+EXISTING USER STORIES:
+${itemsJson || 'No User Stories found'}
+
+ANALYZE AND RESPOND WITH ONLY THIS JSON STRUCTURE:
+{
+  "correct": [
+    { "id": number, "title": "string", "reason": "why it's correct and well-defined" }
+  ],
+  "toUpdate": [
+    { "id": number, "title": "string", "issue": "what's wrong", "suggestion": "how to fix" }
+  ],
+  "toDelete": [
+    { "id": number, "title": "string", "reason": "why to delete (duplicate, out of scope, etc.)" }
+  ],
+  "newItems": [
+    { "title": "string", "description": "As a [user], I want [feature], so that [benefit]. Acceptance Criteria: ...", "storyPoints": number, "reason": "why needed" }
+  ],
+  "summary": "Overall assessment in 1-2 sentences"
+}`
+    : `You are an expert Agile coach. Evaluate the Tasks created for this User Story.
 
 USER STORY:
-Title: ${storyTitle}${descText}${timeConstraint}
+Title: ${parentTitle}
+Description: ${parentDescription}
 
 EXISTING TASKS:
-${tasksJson || 'No tasks found'}
+${itemsJson || 'No Tasks found'}
 
 ANALYZE AND RESPOND WITH ONLY THIS JSON STRUCTURE:
 {
@@ -972,7 +1106,7 @@ ANALYZE AND RESPOND WITH ONLY THIS JSON STRUCTURE:
   "toDelete": [
     { "id": number, "title": "string", "reason": "why to delete" }
   ],
-  "newTasks": [
+  "newItems": [
     { "title": "string", "description": "string", "hours": number, "reason": "why needed" }
   ],
   "summary": "Overall assessment in 1-2 sentences"
@@ -1004,11 +1138,25 @@ ANALYZE AND RESPOND WITH ONLY THIS JSON STRUCTURE:
   return JSON.parse(content);
 }
 
-function displayEvaluationResults(evaluation) {
+function displayEvaluationResults(evaluation, parentType = 'User Story') {
   const resultsEl = document.getElementById('evaluationResults');
   resultsEl.classList.remove('hidden');
   
-  // Correct tasks
+  const isFeature = parentType === 'Feature';
+  const childType = isFeature ? 'User Stories' : 'Tasks';
+  const childTypeSingular = isFeature ? 'User Story' : 'Task';
+  
+  // Update section titles
+  document.querySelector('#evaluationResults .eval-section:nth-child(1) .eval-section-title').innerHTML = 
+    `<span class="status-icon success">✓</span> Correct ${childType}`;
+  document.querySelector('#evaluationResults .eval-section:nth-child(2) .eval-section-title').innerHTML = 
+    `<span class="status-icon warning">⚠</span> ${childType} to Update`;
+  document.querySelector('#evaluationResults .eval-section:nth-child(3) .eval-section-title').innerHTML = 
+    `<span class="status-icon error">✕</span> ${childType} to Delete`;
+  document.querySelector('#evaluationResults .eval-section:nth-child(4) .eval-section-title').innerHTML = 
+    `<span class="status-icon info">+</span> Suggested New ${childType}`;
+  
+  // Correct items
   document.getElementById('correctTasks').innerHTML = 
     evaluation.correct?.length ? evaluation.correct.map(t => `
       <div class="eval-item">
@@ -1018,9 +1166,9 @@ function displayEvaluationResults(evaluation) {
         <div class="eval-item-title">${escapeHtml(t.title)}</div>
         <div class="eval-item-reason">${escapeHtml(t.reason)}</div>
       </div>
-    `).join('') : '<div class="empty-state"><span class="empty-state-text">No correct tasks identified</span></div>';
+    `).join('') : `<div class="empty-state"><span class="empty-state-text">No correct ${childType.toLowerCase()} identified</span></div>`;
   
-  // Tasks to update
+  // Items to update
   document.getElementById('updateTasks').innerHTML = 
     evaluation.toUpdate?.length ? evaluation.toUpdate.map(t => `
       <div class="eval-item">
@@ -1031,49 +1179,52 @@ function displayEvaluationResults(evaluation) {
         <div class="eval-item-reason">⚠️ ${escapeHtml(t.issue)}</div>
         <div class="eval-item-suggestion">💡 ${escapeHtml(t.suggestion)}</div>
       </div>
-    `).join('') : '<div class="empty-state"><span class="empty-state-text">No updates needed</span></div>';
+    `).join('') : `<div class="empty-state"><span class="empty-state-text">No updates needed</span></div>`;
   
-  // Tasks to delete
+  // Items to delete
   document.getElementById('deleteTasks').innerHTML = 
-    evaluation.toDelete?.length ? evaluation.toDelete.map(t => `
+    evaluation.toDelete?.length ? evaluation.toDelete.map((t, idx) => `
       <div class="eval-item">
         <div class="eval-item-header">
           <span class="eval-item-id">#${t.id || 'New'}</span>
         </div>
         <div class="eval-item-title">${escapeHtml(t.title)}</div>
         <div class="eval-item-reason">${escapeHtml(t.reason)}</div>
+        ${t.id ? `<div class="eval-item-actions">
+          <button class="btn btn-danger btn-sm" data-action="deleteItem" data-id="${t.id}" data-index="${idx}">🗑️ Delete from ADO</button>
+        </div>` : ''}
       </div>
-    `).join('') : '<div class="empty-state"><span class="empty-state-text">No tasks to delete</span></div>';
+    `).join('') : `<div class="empty-state"><span class="empty-state-text">No ${childType.toLowerCase()} to delete</span></div>`;
   
-  // Suggested new tasks
+  // Suggested new items
+  const newItems = evaluation.newItems || evaluation.newTasks || [];
   document.getElementById('suggestedTasks').innerHTML = 
-    evaluation.newTasks?.length ? evaluation.newTasks.map((t, idx) => `
+    newItems.length ? newItems.map((t, idx) => `
       <div class="eval-item">
         <div class="eval-item-title">${escapeHtml(t.title)}</div>
         <div class="eval-item-reason">${escapeHtml(t.description)}</div>
-        <div class="eval-item-suggestion">⏱️ ${t.hours}h - ${escapeHtml(t.reason)}</div>
+        <div class="eval-item-suggestion">⏱️ ${isFeature ? (t.storyPoints || 0) + ' SP' : (t.hours || 0) + 'h'} - ${escapeHtml(t.reason)}</div>
         <div class="eval-item-actions">
-          <button class="btn btn-success btn-sm" data-action="createTask" data-index="${idx}">➕ Create Task</button>
+          <button class="btn btn-success btn-sm" data-action="createTask" data-index="${idx}">➕ Create ${childTypeSingular}</button>
         </div>
       </div>
-    `).join('') : '<div class="empty-state"><span class="empty-state-text">No new tasks suggested</span></div>';
+    `).join('') : `<div class="empty-state"><span class="empty-state-text">No new ${childType.toLowerCase()} suggested</span></div>`;
   
   // Summary with action buttons
-  const hasUpdates = evaluation.toUpdate?.length > 0;
-  const hasNew = evaluation.newTasks?.length > 0;
+  const hasNew = newItems.length > 0;
   
   document.getElementById('evalSummary').innerHTML = `
     <h4>📊 Summary</h4>
     <p>${escapeHtml(evaluation.summary || 'Evaluation complete.')}</p>
-    ${(hasNew) ? `
+    ${hasNew ? `
       <div class="eval-actions">
-        <button class="btn btn-success" data-action="createAllTasks">➕ Create All Suggested Tasks</button>
+        <button class="btn btn-success" data-action="createAllTasks">➕ Create All Suggested ${childType}</button>
       </div>
     ` : ''}
   `;
 }
 
-// Create a single suggested task in ADO
+// Create a single suggested item in ADO
 async function createSuggestedTask(index) {
   const { org, project, pat } = getSettings();
   
@@ -1082,53 +1233,62 @@ async function createSuggestedTask(index) {
     return;
   }
   
-  if (!currentEvaluation?.newTasks?.[index]) {
-    showResult('Task not found', 'error');
+  const newItems = currentEvaluation?.newItems || currentEvaluation?.newTasks || [];
+  if (!newItems[index]) {
+    showResult('Item not found', 'error');
     return;
   }
   
-  const task = currentEvaluation.newTasks[index];
+  const item = newItems[index];
+  const isFeature = selectedEvalWorkItemType === 'Feature';
+  const workItemType = isFeature ? 'User Story' : 'Task';
   
   try {
-    showLoading('evaluateLoading', true, 'Creating task...');
+    showLoading('evaluateLoading', true, `Creating ${workItemType.toLowerCase()}...`);
     
     const auth = btoa(":" + pat);
     const body = [
-      { "op": "add", "path": "/fields/System.Title", "value": task.title },
-      { "op": "add", "path": "/fields/System.Description", "value": task.description || '' },
-      { "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.OriginalEstimate", "value": task.hours || 4 },
-      { "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.RemainingWork", "value": task.hours || 4 },
-      { "op": "add", "path": "/fields/Microsoft.VSTS.Common.Priority", "value": 2 },
-      { "op": "add", "path": "/fields/Microsoft.VSTS.Common.Activity", "value": "Development" }
+      { "op": "add", "path": "/fields/System.Title", "value": item.title },
+      { "op": "add", "path": "/fields/System.Description", "value": item.description || '' },
+      { "op": "add", "path": "/fields/Microsoft.VSTS.Common.Priority", "value": 2 }
     ];
     
-    // Add Iteration Path from User Story
+    if (isFeature) {
+      // For User Stories: use Story Points
+      body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.StoryPoints", "value": item.storyPoints || 3 });
+    } else {
+      // For Tasks: use time estimates
+      body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.OriginalEstimate", "value": item.hours || 4 });
+      body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.RemainingWork", "value": item.hours || 4 });
+      body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Common.Activity", "value": "Development" });
+    }
+    
+    // Add Iteration Path from parent
     if (currentEvalStoryData?.iterationPath) {
       body.push({ "op": "add", "path": "/fields/System.IterationPath", "value": currentEvalStoryData.iterationPath });
     }
     
-    // Add Area Path from User Story
+    // Add Area Path from parent
     if (currentEvalStoryData?.areaPath) {
       body.push({ "op": "add", "path": "/fields/System.AreaPath", "value": currentEvalStoryData.areaPath });
     }
     
-    // Assign to same user as User Story (if exists)
+    // Assign to same user as parent (if exists)
     if (currentEvalStoryData?.assignedTo?.uniqueName) {
       body.push({ "op": "add", "path": "/fields/System.AssignedTo", "value": currentEvalStoryData.assignedTo.uniqueName });
     }
     
-    // Link to parent story if we have the ID
-    if (currentEvalStoryId) {
-      const storyUrl = `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems/${currentEvalStoryId}`;
+    // Link to parent work item
+    if (currentEvalStoryId && currentEvalStoryData?.url) {
       body.push({
         "op": "add",
         "path": "/relations/-",
-        "value": { "rel": "System.LinkTypes.Hierarchy-Reverse", "url": storyUrl }
+        "value": { "rel": "System.LinkTypes.Hierarchy-Reverse", "url": currentEvalStoryData.url }
       });
     }
     
     const response = await fetch(
-      `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems/$Task?api-version=7.0`,
+      `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems/$${encodeURIComponent(workItemType)}?api-version=7.0`,
       {
         method: "POST",
         headers: {
@@ -1143,10 +1303,10 @@ async function createSuggestedTask(index) {
     
     if (response.ok) {
       const created = await response.json();
-      showResult(`✓ Created task #${created.id}: ${task.title}`, 'success');
+      showResult(`✓ Created ${workItemType.toLowerCase()} #${created.id}: ${item.title}`, 'success');
       // Remove from suggestions
-      currentEvaluation.newTasks.splice(index, 1);
-      displayEvaluationResults(currentEvaluation);
+      newItems.splice(index, 1);
+      displayEvaluationResults(currentEvaluation, selectedEvalWorkItemType);
     } else {
       const error = await response.text();
       showResult(`Failed to create task: ${response.status}`, 'error');
@@ -1157,7 +1317,57 @@ async function createSuggestedTask(index) {
   }
 }
 
-// Create all suggested tasks
+// Delete a work item from ADO
+async function deleteWorkItemFromADO(workItemId, index) {
+  const { org, project, pat } = getSettings();
+  
+  if (!org || !project || !pat) {
+    showResult('Please configure settings first (click ⚙️)', 'error');
+    return;
+  }
+  
+  // Confirm deletion
+  const isFeature = selectedEvalWorkItemType === 'Feature';
+  const itemType = isFeature ? 'User Story' : 'Task';
+  
+  if (!confirm(`Are you sure you want to delete ${itemType} #${workItemId}? This action cannot be undone.`)) {
+    return;
+  }
+  
+  try {
+    showLoading('evaluateLoading', true, `Deleting ${itemType.toLowerCase()} #${workItemId}...`);
+    
+    const auth = btoa(":" + pat);
+    const response = await fetch(
+      `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems/${workItemId}?api-version=7.0`,
+      {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Basic ${auth}`
+        }
+      }
+    );
+    
+    showLoading('evaluateLoading', false);
+    
+    if (response.ok) {
+      showResult(`✓ Deleted ${itemType.toLowerCase()} #${workItemId}`, 'success');
+      // Remove from toDelete list
+      if (currentEvaluation?.toDelete) {
+        currentEvaluation.toDelete.splice(index, 1);
+        displayEvaluationResults(currentEvaluation, selectedEvalWorkItemType);
+      }
+    } else {
+      const errorText = await response.text();
+      showResult(`Failed to delete: ${response.status}. ${errorText}`, 'error');
+    }
+  } catch (error) {
+    showLoading('evaluateLoading', false);
+    showResult(`Error: ${error.message}`, 'error');
+  }
+}
+
+// Create all suggested items
 async function createAllSuggestedTasks() {
   const { org, project, pat } = getSettings();
   
@@ -1166,54 +1376,60 @@ async function createAllSuggestedTasks() {
     return;
   }
   
-  if (!currentEvaluation?.newTasks?.length) {
-    showResult('No tasks to create', 'error');
+  const newItems = currentEvaluation?.newItems || currentEvaluation?.newTasks || [];
+  if (!newItems.length) {
+    showResult('No items to create', 'error');
     return;
   }
   
+  const isFeature = selectedEvalWorkItemType === 'Feature';
+  const workItemType = isFeature ? 'User Story' : 'Task';
+  const itemLabel = isFeature ? 'user stories' : 'tasks';
+  
   try {
-    showLoading('evaluateLoading', true, `Creating ${currentEvaluation.newTasks.length} tasks...`);
+    showLoading('evaluateLoading', true, `Creating ${newItems.length} ${itemLabel}...`);
     
     const auth = btoa(":" + pat);
     let created = 0, failed = 0;
     
-    for (const task of currentEvaluation.newTasks) {
+    for (const item of newItems) {
       try {
         const body = [
-          { "op": "add", "path": "/fields/System.Title", "value": task.title },
-          { "op": "add", "path": "/fields/System.Description", "value": task.description || '' },
-          { "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.OriginalEstimate", "value": task.hours || 4 },
-          { "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.RemainingWork", "value": task.hours || 4 },
-          { "op": "add", "path": "/fields/Microsoft.VSTS.Common.Priority", "value": 2 },
-          { "op": "add", "path": "/fields/Microsoft.VSTS.Common.Activity", "value": "Development" }
+          { "op": "add", "path": "/fields/System.Title", "value": item.title },
+          { "op": "add", "path": "/fields/System.Description", "value": item.description || '' },
+          { "op": "add", "path": "/fields/Microsoft.VSTS.Common.Priority", "value": 2 }
         ];
         
-        // Add Iteration Path from User Story
+        if (isFeature) {
+          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.StoryPoints", "value": item.storyPoints || 3 });
+        } else {
+          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.OriginalEstimate", "value": item.hours || 4 });
+          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.RemainingWork", "value": item.hours || 4 });
+          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Common.Activity", "value": "Development" });
+        }
+        
         if (currentEvalStoryData?.iterationPath) {
           body.push({ "op": "add", "path": "/fields/System.IterationPath", "value": currentEvalStoryData.iterationPath });
         }
         
-        // Add Area Path from User Story
         if (currentEvalStoryData?.areaPath) {
           body.push({ "op": "add", "path": "/fields/System.AreaPath", "value": currentEvalStoryData.areaPath });
         }
         
-        // Assign to same user as User Story (if exists)
         if (currentEvalStoryData?.assignedTo?.uniqueName) {
           body.push({ "op": "add", "path": "/fields/System.AssignedTo", "value": currentEvalStoryData.assignedTo.uniqueName });
         }
         
-        if (currentEvalStoryId) {
-          const storyUrl = `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems/${currentEvalStoryId}`;
+        if (currentEvalStoryId && currentEvalStoryData?.url) {
           body.push({
             "op": "add",
             "path": "/relations/-",
-            "value": { "rel": "System.LinkTypes.Hierarchy-Reverse", "url": storyUrl }
+            "value": { "rel": "System.LinkTypes.Hierarchy-Reverse", "url": currentEvalStoryData.url }
           });
         }
         
         const response = await fetch(
-          `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems/$Task?api-version=7.0`,
+          `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems/$${encodeURIComponent(workItemType)}?api-version=7.0`,
           {
             method: "POST",
             headers: {
@@ -1234,9 +1450,10 @@ async function createAllSuggestedTasks() {
     showLoading('evaluateLoading', false);
     
     if (failed === 0) {
-      showResult(`✓ Created ${created} tasks in Azure DevOps!`, 'success');
-      currentEvaluation.newTasks = [];
-      displayEvaluationResults(currentEvaluation);
+      showResult(`✓ Created ${created} ${itemLabel} in Azure DevOps!`, 'success');
+      if (currentEvaluation.newItems) currentEvaluation.newItems = [];
+      if (currentEvaluation.newTasks) currentEvaluation.newTasks = [];
+      displayEvaluationResults(currentEvaluation, selectedEvalWorkItemType);
     } else {
       showResult(`Created ${created}, ${failed} failed`, 'error');
     }
@@ -1250,106 +1467,190 @@ async function createAllSuggestedTasks() {
 // TAB 3: Easy Insights
 // ============================================
 
+let allInsightWorkItems = []; // Store all fetched work items
+let filteredInsightWorkItems = []; // Store filtered work items
+let currentInsights = null; // Store current insights for auto-fix
+
 async function fetchUserWorkItems() {
   const { org, project, pat } = getSettings();
   
-  if (!org || !project || !pat) {
+  if (!org || !pat) {
     showResult('Please configure settings first (click ⚙️)', 'error');
     return;
   }
   
   const userName = document.getElementById('insightUserName').value.trim();
-  if (!userName) {
-    showResult('Please enter a user name', 'error');
-    return;
-  }
-  await analyzeInsights();
-}
-
-async function analyzeInsights() {
-  const { org, project, pat } = getSettings();
-  const userName = document.getElementById('insightUserName').value.trim();
-  
-  if (!org || !project || !pat) {
-    showResult('Please configure settings first (click ⚙️)', 'error');
-    return;
-  }
-  
   if (!userName) {
     showResult('Please enter a user name', 'error');
     return;
   }
   
   try {
-    showLoading('insightsLoading', true, 'Fetching work items...');
+    showLoading('insightsLoading', true, 'Fetching work items across all projects...');
     
     const auth = btoa(":" + pat);
     
-    // WIQL query to get all work items assigned to user
-    const wiql = {
-      query: `SELECT [System.Id], [System.Title], [System.WorkItemType] 
-              FROM WorkItems 
-              WHERE [System.AssignedTo] CONTAINS '${userName}' 
-              AND [System.State] <> 'Closed' 
-              AND [System.State] <> 'Removed'
-              ORDER BY [System.WorkItemType]`
-    };
-    
-    const wiqlResponse = await fetch(
-      `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/wiql?api-version=7.0`,
+    // First, get all projects the user has access to
+    const projectsResponse = await fetch(
+      `https://dev.azure.com/${org}/_apis/projects?api-version=7.0`,
       {
-        method: 'POST',
-        headers: {
-          "Authorization": `Basic ${auth}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(wiql)
+        headers: { "Authorization": `Basic ${auth}` }
       }
     );
     
-    if (!wiqlResponse.ok) throw new Error('Failed to query work items');
+    if (!projectsResponse.ok) throw new Error('Failed to fetch projects');
     
-    const wiqlData = await wiqlResponse.json();
-    const workItemIds = wiqlData.workItems?.map(w => w.id) || [];
+    const projectsData = await projectsResponse.json();
+    const projects = projectsData.value || [];
     
-    if (workItemIds.length === 0) {
+    // Fetch work items from all projects
+    allInsightWorkItems = [];
+    const projectSet = new Set();
+    const sprintSet = new Set();
+    
+    for (const proj of projects) {
+      try {
+        const wiql = {
+          query: `SELECT [System.Id], [System.Title], [System.WorkItemType], [System.IterationPath], [System.AreaPath], [System.TeamProject]
+                  FROM WorkItems 
+                  WHERE [System.AssignedTo] CONTAINS '${userName}' 
+                  AND [System.State] <> 'Closed' 
+                  AND [System.State] <> 'Removed'
+                  ORDER BY [System.WorkItemType]`
+        };
+        
+        const wiqlResponse = await fetch(
+          `https://dev.azure.com/${org}/${encodeURIComponent(proj.name)}/_apis/wit/wiql?api-version=7.0`,
+          {
+            method: 'POST',
+            headers: {
+              "Authorization": `Basic ${auth}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(wiql)
+          }
+        );
+        
+        if (wiqlResponse.ok) {
+          const wiqlData = await wiqlResponse.json();
+          const workItemIds = wiqlData.workItems?.map(w => w.id) || [];
+          
+          if (workItemIds.length > 0) {
+            const items = await fetchWorkItemDetails(org, proj.name, auth, workItemIds);
+            for (const item of items) {
+              item.projectName = proj.name;
+              allInsightWorkItems.push(item);
+              projectSet.add(proj.name);
+              const iterationPath = item.fields['System.IterationPath'] || '';
+              if (iterationPath) sprintSet.add(iterationPath);
+            }
+          }
+        }
+      } catch (e) {
+        console.log(`Error fetching from ${proj.name}:`, e);
+      }
+    }
+    
+    if (allInsightWorkItems.length === 0) {
       showLoading('insightsLoading', false);
       showResult('No work items found for this user', 'error');
       return;
     }
     
-    showLoading('insightsLoading', true, `Validating ${workItemIds.length} work items...`);
+    // Populate filter dropdowns
+    populateFilterDropdowns(Array.from(projectSet), Array.from(sprintSet));
     
-    // Fetch details for all work items
-    const workItems = await fetchWorkItemDetails(org, project, auth, workItemIds);
+    // Show filters
+    document.getElementById('insightFilters').classList.remove('hidden');
     
-    // Categorize and validate
-    const insights = {
-      features: [],
-      stories: [],
-      tasks: []
-    };
-    
-    for (const item of workItems) {
-      const type = item.fields['System.WorkItemType'];
-      const validated = validateWorkItem(item, type);
-      
-      if (type === 'Feature') {
-        insights.features.push(validated);
-      } else if (type === 'User Story') {
-        insights.stories.push(validated);
-      } else if (type === 'Task') {
-        insights.tasks.push(validated);
-      }
-    }
-    
-    showLoading('insightsLoading', false);
-    displayInsightsResults(insights);
+    // Apply initial filters (show all)
+    filteredInsightWorkItems = [...allInsightWorkItems];
+    analyzeAndDisplayInsights();
     
   } catch (error) {
     showLoading('insightsLoading', false);
     showResult(`Error: ${error.message}`, 'error');
   }
+}
+
+function populateFilterDropdowns(projects, sprints) {
+  const projectSelect = document.getElementById('filterProject');
+  const sprintSelect = document.getElementById('filterSprint');
+  
+  // Clear existing options except first
+  projectSelect.innerHTML = '<option value="">All Projects</option>';
+  sprintSelect.innerHTML = '<option value="">All Sprints</option>';
+  
+  // Add projects
+  projects.sort().forEach(proj => {
+    const option = document.createElement('option');
+    option.value = proj;
+    option.textContent = proj;
+    projectSelect.appendChild(option);
+  });
+  
+  // Add sprints
+  sprints.sort().forEach(sprint => {
+    const option = document.createElement('option');
+    option.value = sprint;
+    // Show just the sprint name (last part of path)
+    option.textContent = sprint.split('\\').pop();
+    sprintSelect.appendChild(option);
+  });
+}
+
+function applyInsightFilters() {
+  const projectFilter = document.getElementById('filterProject').value;
+  const sprintFilter = document.getElementById('filterSprint').value;
+  const typeFilter = document.getElementById('filterWorkItemType').value;
+  
+  filteredInsightWorkItems = allInsightWorkItems.filter(item => {
+    const matchProject = !projectFilter || item.projectName === projectFilter;
+    const matchSprint = !sprintFilter || item.fields['System.IterationPath'] === sprintFilter;
+    const matchType = !typeFilter || item.fields['System.WorkItemType'] === typeFilter;
+    return matchProject && matchSprint && matchType;
+  });
+  
+  analyzeAndDisplayInsights();
+}
+
+function analyzeAndDisplayInsights() {
+  showLoading('insightsLoading', true, `Validating ${filteredInsightWorkItems.length} work items...`);
+  
+  // Categorize and validate
+  const insights = {
+    features: [],
+    stories: [],
+    tasks: [],
+    allItems: [] // Store all for auto-fix
+  };
+  
+  for (const item of filteredInsightWorkItems) {
+    const type = item.fields['System.WorkItemType'];
+    const validated = validateWorkItem(item, type);
+    validated.projectName = item.projectName;
+    validated.rawItem = item; // Keep reference for updates
+    
+    insights.allItems.push(validated);
+    
+    if (type === 'Feature') {
+      insights.features.push(validated);
+    } else if (type === 'User Story') {
+      insights.stories.push(validated);
+    } else if (type === 'Task') {
+      insights.tasks.push(validated);
+    }
+  }
+  
+  currentInsights = insights;
+  
+  showLoading('insightsLoading', false);
+  displayInsightsResults(insights);
+}
+
+async function analyzeInsights() {
+  // This is now handled by fetchUserWorkItems
+  await fetchUserWorkItems();
 }
 
 async function fetchWorkItemDetails(org, project, auth, ids) {
@@ -1402,6 +1703,18 @@ function displayInsightsResults(insights) {
   document.getElementById('storyCount').textContent = insights.stories.length;
   document.getElementById('taskCountInsights').textContent = insights.tasks.length;
   
+  // Count incomplete items
+  const incompleteCount = insights.allItems.filter(i => !i.isComplete).length;
+  document.getElementById('incompleteCount').textContent = incompleteCount;
+  
+  // Show/hide auto-fix button based on incomplete count
+  const autoFixSection = document.getElementById('autoFixSection');
+  if (incompleteCount > 0) {
+    autoFixSection.classList.remove('hidden');
+  } else {
+    autoFixSection.classList.add('hidden');
+  }
+  
   // Show results
   const resultsEl = document.getElementById('insightsResults');
   resultsEl.classList.remove('hidden');
@@ -1430,11 +1743,13 @@ function displayInsightsResults(insights) {
 
 function renderInsightItem(item, type) {
   const suggestion = generateSuggestion(item.missingFields, type);
+  const projectInfo = item.projectName ? `<span class="project-badge">${escapeHtml(item.projectName)}</span>` : '';
   
   return `
-    <div class="insight-item">
+    <div class="insight-item" data-item-id="${item.id}">
       <div class="insight-item-header">
         <span class="insight-item-id">#${item.id}</span>
+        ${projectInfo}
         <span class="status-badge ${item.isComplete ? 'complete' : 'incomplete'}">
           ${item.isComplete ? '✅ Complete' : '⚠️ Incomplete'}
         </span>
@@ -1451,9 +1766,26 @@ function renderInsightItem(item, type) {
           <div class="insight-suggestion-label">AI Suggestion</div>
           <div class="insight-suggestion-text">${escapeHtml(suggestion)}</div>
         </div>
+        <div class="insight-actions">
+          <button class="btn btn-success btn-sm" data-action="fixItem" data-id="${item.id}" data-type="${item.type}">
+            🔧 Auto-Fix This Item
+          </button>
+        </div>
       ` : ''}
     </div>
   `;
+}
+
+// Event handler for insights clicks
+function handleInsightsClick(e) {
+  const target = e.target.closest('button');
+  if (!target) return;
+  
+  if (target.dataset.action === 'fixItem') {
+    const id = parseInt(target.dataset.id, 10);
+    const type = target.dataset.type;
+    autoFixSingleItem(id, type);
+  }
 }
 
 function generateSuggestion(missingFields, type) {
@@ -1481,6 +1813,212 @@ function generateSuggestion(missingFields, type) {
     .slice(0, 2);
   
   return relevantSuggestions.join('. ');
+}
+
+// Generate default values for missing fields
+function generateDefaultValues(missingFields, type, itemTitle) {
+  const today = new Date();
+  const nextWeek = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const twoWeeks = new Date(today.getTime() + 14 * 24 * 60 * 60 * 1000);
+  
+  const defaults = {
+    'Priority': 2, // High
+    'Risk': 2, // Medium
+    'Effort': 8,
+    'Business Value': 50,
+    'Time Criticality': 50,
+    'Start Date': today.toISOString(),
+    'Target Date': twoWeeks.toISOString(),
+    'Planned Start Date': today.toISOString(),
+    'Planned End Date': nextWeek.toISOString(),
+    'Story Points': 3,
+    'QA Ready Date': nextWeek.toISOString(),
+    'Original Estimate': 4,
+    'Remaining Work': 4,
+    'Completed Work': 0,
+    'Activity': 'Development',
+    'Finish Date': nextWeek.toISOString(),
+    'Actual Start Date': today.toISOString(),
+    'Actual End Date': nextWeek.toISOString()
+  };
+  
+  const fieldMapping = {
+    'Priority': 'Microsoft.VSTS.Common.Priority',
+    'Risk': 'Microsoft.VSTS.Common.Risk',
+    'Effort': 'Microsoft.VSTS.Scheduling.Effort',
+    'Business Value': 'Microsoft.VSTS.Common.BusinessValue',
+    'Time Criticality': 'Microsoft.VSTS.Common.TimeCriticality',
+    'Start Date': 'Microsoft.VSTS.Scheduling.StartDate',
+    'Target Date': 'Microsoft.VSTS.Scheduling.TargetDate',
+    'Planned Start Date': 'Microsoft.VSTS.Scheduling.StartDate',
+    'Planned End Date': 'Microsoft.VSTS.Scheduling.FinishDate',
+    'Story Points': 'Microsoft.VSTS.Scheduling.StoryPoints',
+    'QA Ready Date': 'Custom.QAReadyDate',
+    'Original Estimate': 'Microsoft.VSTS.Scheduling.OriginalEstimate',
+    'Remaining Work': 'Microsoft.VSTS.Scheduling.RemainingWork',
+    'Completed Work': 'Microsoft.VSTS.Scheduling.CompletedWork',
+    'Activity': 'Microsoft.VSTS.Common.Activity',
+    'Finish Date': 'Microsoft.VSTS.Scheduling.FinishDate',
+    'Actual Start Date': 'Microsoft.VSTS.Scheduling.ActualStartDate',
+    'Actual End Date': 'Microsoft.VSTS.Scheduling.ActualEndDate'
+  };
+  
+  const updates = [];
+  for (const field of missingFields) {
+    const apiField = fieldMapping[field];
+    const value = defaults[field];
+    if (apiField && value !== undefined) {
+      updates.push({
+        op: 'add',
+        path: `/fields/${apiField}`,
+        value: value
+      });
+    }
+  }
+  
+  return updates;
+}
+
+// Auto-fix a single item
+async function autoFixSingleItem(itemId, itemType) {
+  const { org, pat } = getSettings();
+  
+  if (!org || !pat) {
+    showResult('Please configure settings first', 'error');
+    return;
+  }
+  
+  // Find the item in current insights
+  const item = currentInsights?.allItems.find(i => i.id === itemId);
+  if (!item || item.isComplete) {
+    showResult('Item not found or already complete', 'error');
+    return;
+  }
+  
+  const projectName = item.projectName || document.getElementById('filterProject').value;
+  if (!projectName) {
+    showResult('Cannot determine project for this item', 'error');
+    return;
+  }
+  
+  try {
+    showLoading('insightsLoading', true, `Updating item #${itemId}...`);
+    
+    const updates = generateDefaultValues(item.missingFields, itemType, item.title);
+    
+    if (updates.length === 0) {
+      showLoading('insightsLoading', false);
+      showResult('No fields to update', 'error');
+      return;
+    }
+    
+    const auth = btoa(":" + pat);
+    const response = await fetch(
+      `https://dev.azure.com/${org}/${encodeURIComponent(projectName)}/_apis/wit/workitems/${itemId}?api-version=7.0`,
+      {
+        method: 'PATCH',
+        headers: {
+          "Authorization": `Basic ${auth}`,
+          "Content-Type": "application/json-patch+json"
+        },
+        body: JSON.stringify(updates)
+      }
+    );
+    
+    showLoading('insightsLoading', false);
+    
+    if (response.ok) {
+      showResult(`✓ Updated ${item.missingFields.length} fields in #${itemId}`, 'success');
+      // Refresh the insights
+      applyInsightFilters();
+    } else {
+      const errorText = await response.text();
+      showResult(`Failed to update: ${response.status}`, 'error');
+      console.error('Update error:', errorText);
+    }
+  } catch (error) {
+    showLoading('insightsLoading', false);
+    showResult(`Error: ${error.message}`, 'error');
+  }
+}
+
+// Auto-fix all incomplete items
+async function autoFixAllIncomplete() {
+  const { org, pat } = getSettings();
+  
+  if (!org || !pat) {
+    showResult('Please configure settings first', 'error');
+    return;
+  }
+  
+  const incompleteItems = currentInsights?.allItems.filter(i => !i.isComplete) || [];
+  
+  if (incompleteItems.length === 0) {
+    showResult('No incomplete items to fix', 'error');
+    return;
+  }
+  
+  if (!confirm(`This will auto-fill missing fields for ${incompleteItems.length} work items. Continue?`)) {
+    return;
+  }
+  
+  try {
+    showLoading('insightsLoading', true, `Updating ${incompleteItems.length} items...`);
+    
+    const auth = btoa(":" + pat);
+    let updated = 0, failed = 0;
+    
+    for (const item of incompleteItems) {
+      const projectName = item.projectName;
+      if (!projectName) {
+        failed++;
+        continue;
+      }
+      
+      const updates = generateDefaultValues(item.missingFields, item.type, item.title);
+      
+      if (updates.length === 0) {
+        continue;
+      }
+      
+      try {
+        const response = await fetch(
+          `https://dev.azure.com/${org}/${encodeURIComponent(projectName)}/_apis/wit/workitems/${item.id}?api-version=7.0`,
+          {
+            method: 'PATCH',
+            headers: {
+              "Authorization": `Basic ${auth}`,
+              "Content-Type": "application/json-patch+json"
+            },
+            body: JSON.stringify(updates)
+          }
+        );
+        
+        if (response.ok) {
+          updated++;
+        } else {
+          failed++;
+        }
+      } catch (e) {
+        failed++;
+      }
+    }
+    
+    showLoading('insightsLoading', false);
+    
+    if (failed === 0) {
+      showResult(`✓ Successfully updated ${updated} items!`, 'success');
+    } else {
+      showResult(`Updated ${updated} items, ${failed} failed`, 'error');
+    }
+    
+    // Refresh the insights
+    await fetchUserWorkItems();
+    
+  } catch (error) {
+    showLoading('insightsLoading', false);
+    showResult(`Error: ${error.message}`, 'error');
+  }
 }
 
 // ============================================

@@ -848,6 +848,35 @@ body {
    Insights Tab
    ============================================ */
 
+.filters-section {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.filters-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.filter-group {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.filter-group .form-label {
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.filter-group .form-select {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
 .insights-summary {
   margin-bottom: 24px;
 }
@@ -881,6 +910,41 @@ body {
 .summary-card.tasks {
   background: linear-gradient(135deg, #dcfce7 0%, #f0fdf4 100%);
   border: 1px solid #86efac;
+}
+
+.summary-card.incomplete {
+  background: linear-gradient(135deg, #fef2f2 0%, #fce7e7 100%);
+  border: 1px solid #fca5a5;
+}
+
+.summary-card.incomplete .summary-count {
+  color: #dc2626;
+}
+
+.auto-fix-section {
+  margin-top: 16px;
+  padding: 16px;
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+  border: 1px solid #86efac;
+  border-radius: 12px;
+  text-align: center;
+}
+
+.auto-fix-section .btn-lg {
+  padding: 14px 28px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.auto-fix-section .btn-icon {
+  margin-right: 8px;
+}
+
+.auto-fix-section .form-hint {
+  margin-top: 8px;
+  margin-bottom: 0;
+  font-size: 11px;
+  color: #059669;
 }
 
 .summary-icon {
@@ -957,6 +1021,18 @@ body {
 .type-badge.task {
   background: #dcfce7;
   color: #166534;
+}
+
+.project-badge {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  margin-left: 8px;
 }
 
 .section-stats {
