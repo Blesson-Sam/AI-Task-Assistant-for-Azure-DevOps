@@ -171,8 +171,9 @@ function handleTaskListClick(e) {
   } else if (target.dataset.action === 'remove') {
     removeTask(taskId);
   } else if (target.dataset.action === 'goToEvaluate') {
-    const storyId = target.dataset.storyId;
-    goToEvaluateTab(storyId);
+    const workItemId = target.dataset.workItemId;
+    const evalType = target.dataset.evalType;
+    goToEvaluateTab(workItemId, evalType);
   } else if (target.dataset.action === 'forceGenerate') {
     forceGenerateTasks();
   }
@@ -428,7 +429,8 @@ async function fetchWorkItem() {
     showLoading('createLoading', true, 'Fetching work item...');
     
     const auth = btoa(":" + pat);
-    const url = `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems/${storyId}?api-version=7.0`;
+    // Include $expand=relations to get child items
+    const url = `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems/${storyId}?$expand=relations&api-version=7.0`;
     
     const response = await fetch(url, {
       headers: {
@@ -440,6 +442,22 @@ async function fetchWorkItem() {
     if (!response.ok) throw new Error(`Failed to fetch: ${response.status}`);
     
     const data = await response.json();
+    
+    // Validate work item type matches selection
+    const actualType = data.fields['System.WorkItemType'];
+    if (actualType !== selectedWorkItemType) {
+      showLoading('createLoading', false);
+      const expectedAction = selectedWorkItemType === 'Feature' ? 'create User Stories' : 'create Tasks';
+      const actualAction = actualType === 'Feature' ? 'create User Stories from it' : actualType === 'User Story' ? 'create Tasks from it' : 'view it';
+      showResult(`❌ Type Mismatch: You selected "${selectedWorkItemType}" but #${storyId} is a "${actualType}". Please select the correct type or enter a different Work Item ID.`, 'error');
+      
+      // Clear form
+      document.getElementById('workItemTitle').value = '';
+      document.getElementById('workItemDescription').value = '';
+      document.getElementById('workItemInfo').classList.add('hidden');
+      return;
+    }
+    
     userStoryData = data;
     
     const title = data.fields['System.Title'] || '';
@@ -460,8 +478,16 @@ async function fetchWorkItem() {
     document.getElementById('assigneeName').textContent = 
       assignedTo ? (assignedTo.displayName || assignedTo.uniqueName) : 'Unassigned';
     
+    // Check for existing child items
+    const existingChildItems = await checkForExistingChildItems(org, project, pat, data, selectedWorkItemType);
+    
     showLoading('createLoading', false);
-    showResult(`Fetched: ${title}`, 'success');
+    
+    if (existingChildItems.count > 0) {
+      showExistingChildItemsWarning(existingChildItems.count, storyId, selectedWorkItemType);
+    } else {
+      showResult(`Fetched: ${title}`, 'success');
+    }
     
   } catch (error) {
     showLoading('createLoading', false);
@@ -491,20 +517,20 @@ async function generateTasks() {
     return;
   }
   
-  // Check if tasks already exist for this User Story
-  if (storyId && org && project && pat) {
+  // Check if child items already exist
+  if (storyId && org && project && pat && userStoryData) {
     try {
-      showLoading('createLoading', true, 'Checking for existing tasks...');
-      const existingTasks = await fetchLinkedTasks(org, project, pat, storyId);
+      showLoading('createLoading', true, 'Checking for existing items...');
+      const existingItems = await checkForExistingChildItems(org, project, pat, userStoryData, selectedWorkItemType);
       
-      if (existingTasks.length > 0) {
+      if (existingItems.count > 0) {
         showLoading('createLoading', false);
-        showExistingTasksWarning(existingTasks.length, storyId);
+        showExistingChildItemsWarning(existingItems.count, storyId, selectedWorkItemType);
         return;
       }
     } catch (e) {
       // Continue if check fails
-      console.log('Could not check existing tasks:', e);
+      console.log('Could not check existing items:', e);
     }
   }
   
@@ -2093,20 +2119,60 @@ function showResult(message, type) {
 }
 
 // Show warning when tasks already exist for a user story
-function showExistingTasksWarning(taskCount, storyId) {
+// Check for existing child items (User Stories for Feature, Tasks for User Story)
+async function checkForExistingChildItems(org, project, pat, parentData, parentType) {
+  const auth = btoa(":" + pat);
+  const relations = parentData.relations || [];
+  
+  // Filter child relations
+  const childUrls = relations
+    .filter(r => r.rel === 'System.LinkTypes.Hierarchy-Forward')
+    .map(r => r.url);
+  
+  if (childUrls.length === 0) return { count: 0, items: [] };
+  
+  const expectedChildType = parentType === 'Feature' ? 'User Story' : 'Task';
+  let count = 0;
+  
+  for (const url of childUrls) {
+    try {
+      const response = await fetch(url, {
+        headers: { "Authorization": `Basic ${auth}` }
+      });
+      if (response.ok) {
+        const itemData = await response.json();
+        if (itemData.fields['System.WorkItemType'] === expectedChildType) {
+          count++;
+        }
+      }
+    } catch (e) {
+      console.error('Error checking child item:', e);
+    }
+  }
+  
+  return { count, expectedChildType };
+}
+
+function showExistingChildItemsWarning(itemCount, workItemId, parentType) {
   const section = document.getElementById('tasksSection');
   section.classList.remove('hidden');
+  
+  const isFeature = parentType === 'Feature';
+  const childTypeName = isFeature ? 'User Stories' : 'Tasks';
+  const childTypeSingular = isFeature ? 'User Story' : 'Task';
+  const parentTypeName = isFeature ? 'Feature' : 'User Story';
+  const evalType = isFeature ? 'Feature' : 'User Story';
   
   document.getElementById('tasksList').innerHTML = `
     <div class="existing-tasks-warning">
       <div class="warning-icon">⚠️</div>
       <div class="warning-content">
-        <h4>Tasks Already Exist</h4>
-        <p>This User Story (#${storyId}) already has <strong>${taskCount} task(s)</strong> created.</p>
-        <p>Would you like to evaluate the existing tasks instead?</p>
+        <h4>${childTypeName} Already Exist</h4>
+        <p>This ${parentTypeName} (#${workItemId}) already has <strong>${itemCount} ${itemCount === 1 ? childTypeSingular : childTypeName}</strong> created.</p>
+        <p>Would you like to evaluate the existing ${childTypeName.toLowerCase()} instead?</p>
         <div class="warning-actions">
-          <button class="btn btn-primary" data-action="goToEvaluate" data-story-id="${storyId}">
-            Go to Evaluate Tab
+          <button class="btn btn-primary" data-action="goToEvaluate" data-work-item-id="${workItemId}" data-eval-type="${evalType}">
+            📊 Go to Evaluate Tab
           </button>
           <button class="btn btn-ghost" data-action="forceGenerate">
             Generate Anyway
@@ -2122,25 +2188,25 @@ function showExistingTasksWarning(taskCount, storyId) {
   document.getElementById('clearTasks').classList.add('hidden');
 }
 
-// Go to evaluate tab with story ID pre-filled
-function goToEvaluateTab(storyId) {
+// Go to evaluate tab with work item ID pre-filled
+function goToEvaluateTab(workItemId, evalType) {
   // Switch to evaluate tab
   switchTab('evaluate');
   
-  // Pre-fill the story ID
-  document.getElementById('evalStoryId').value = storyId;
+  // Set the work item type selector
+  if (evalType) {
+    document.getElementById('evalWorkItemType').value = evalType;
+    selectedEvalWorkItemType = evalType;
+  }
   
-  // Copy title and description if available
-  const title = document.getElementById('workItemTitle').value;
-  const description = document.getElementById('workItemDescription').value;
-  
-  if (title) document.getElementById('evalStoryTitle').value = title;
-  if (description) document.getElementById('evalStoryDescription').value = description;
+  // Pre-fill the work item ID
+  document.getElementById('evalStoryId').value = workItemId;
   
   // Clear the create tab
   document.getElementById('tasksSection').classList.add('hidden');
   
-  showResult('Story ID copied to Evaluate tab. Click "Analyze & Evaluate" to review existing tasks.', 'success');
+  const childType = evalType === 'Feature' ? 'User Stories' : 'Tasks';
+  showResult(`Work Item ID copied to Evaluate tab. Click "Fetch & Evaluate" to review existing ${childType}.`, 'success');
 }
 
 // Force generate tasks even if some exist
