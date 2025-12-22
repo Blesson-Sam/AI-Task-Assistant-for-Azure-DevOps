@@ -11,6 +11,9 @@ let areaPath = null;
 let selectedWorkItemType = 'User Story';
 let selectedAIProvider = 'groq'; // Default AI provider
 
+// Parent Feature data (for context and date validation)
+let parentFeatureData = null;
+
 // Evaluate tab state
 let currentEvaluation = null;
 let currentEvalStoryId = null;
@@ -57,6 +60,8 @@ const EXPERIENCE_CONFIG = {
 };
 
 // Validation rules for different work item types
+// isCustom: true means field might not exist in all Azure DevOps organizations
+// isDateField: true means field should be validated for logical date values
 const VALIDATION_RULES = {
   Feature: [
     { field: 'Microsoft.VSTS.Common.Priority', label: 'Priority' },
@@ -64,24 +69,24 @@ const VALIDATION_RULES = {
     { field: 'Microsoft.VSTS.Scheduling.Effort', label: 'Effort' },
     { field: 'Microsoft.VSTS.Common.BusinessValue', label: 'Business Value' },
     { field: 'Microsoft.VSTS.Common.TimeCriticality', label: 'Time Criticality' },
-    { field: 'Microsoft.VSTS.Scheduling.StartDate', label: 'Start Date' },
-    { field: 'Microsoft.VSTS.Scheduling.TargetDate', label: 'Target Date' }
+    { field: 'Microsoft.VSTS.Scheduling.StartDate', label: 'Start Date', isDateField: true },
+    { field: 'Microsoft.VSTS.Scheduling.TargetDate', label: 'Target Date', isDateField: true }
   ],
   'User Story': [
     { field: 'Microsoft.VSTS.Scheduling.StoryPoints', label: 'Story Points' },
     { field: 'Microsoft.VSTS.Common.Priority', label: 'Priority' },
     { field: 'Microsoft.VSTS.Common.Risk', label: 'Risk' },
-    { field: 'Custom.QAReadyDate', label: 'QA Ready Date' },
-    { field: 'Microsoft.VSTS.Scheduling.StartDate', label: 'Planned Start Date' },
-    { field: 'Microsoft.VSTS.Scheduling.FinishDate', label: 'Planned End Date' },
-    { field: 'Microsoft.VSTS.Scheduling.ActualStartDate', label: 'Actual Start Date' },
-    { field: 'Microsoft.VSTS.Scheduling.ActualEndDate', label: 'Actual End Date' }
+    { field: 'Microsoft.VSTS.Scheduling.StartDate', label: 'Planned Start Date', isDateField: true },
+    { field: 'Microsoft.VSTS.Scheduling.FinishDate', label: 'Planned End Date', isDateField: true },
+    { field: 'Custom.QAReadyDateK', label: 'QA Ready Date', isCustom: true, isDateField: true },
+    { field: 'Custom.ActualStartDateK', label: 'Actual Start Date', isCustom: true, isDateField: true },
+    { field: 'Custom.ActualEndDateK', label: 'Actual End Date', isCustom: true, isDateField: true }
   ],
   Task: [
     { field: 'Microsoft.VSTS.Common.Priority', label: 'Priority' },
     { field: 'Microsoft.VSTS.Common.Activity', label: 'Activity' },
-    { field: 'Microsoft.VSTS.Scheduling.StartDate', label: 'Start Date' },
-    { field: 'Microsoft.VSTS.Scheduling.FinishDate', label: 'Finish Date' },
+    { field: 'Microsoft.VSTS.Scheduling.StartDate', label: 'Start Date', isDateField: true },
+    { field: 'Microsoft.VSTS.Scheduling.FinishDate', label: 'Finish Date', isDateField: true },
     { field: 'Microsoft.VSTS.Scheduling.OriginalEstimate', label: 'Original Estimate' },
     { field: 'Microsoft.VSTS.Scheduling.RemainingWork', label: 'Remaining Work' },
     { field: 'Microsoft.VSTS.Scheduling.CompletedWork', label: 'Completed Work' }
@@ -565,6 +570,12 @@ async function fetchWorkItem() {
     // Check for existing child items
     const existingChildItems = await checkForExistingChildItems(org, project, pat, data, selectedWorkItemType);
     
+    // If User Story, fetch parent Feature data for context
+    parentFeatureData = null;
+    if (selectedWorkItemType === 'User Story') {
+      parentFeatureData = await fetchParentFeatureData(org, project, pat, data);
+    }
+    
     showLoading('createLoading', false);
     
     if (existingChildItems.count > 0) {
@@ -660,6 +671,37 @@ async function callAI(userStory, experienceContext, apiKey, hoursForAI, totalHou
     ? 'User Stories with clear acceptance criteria' 
     : 'development tasks';
   
+  // Build context from parent Feature (when creating Tasks from User Story)
+  let parentContext = '';
+  if (!isFeature && parentFeatureData) {
+    const featureTitle = parentFeatureData.fields['System.Title'] || '';
+    const featureDesc = stripHtml(parentFeatureData.fields['System.Description'] || '');
+    const featureStartDate = parentFeatureData.fields['Microsoft.VSTS.Scheduling.StartDate'];
+    const featureTargetDate = parentFeatureData.fields['Microsoft.VSTS.Scheduling.TargetDate'];
+    
+    parentContext = `\n\nPARENT FEATURE CONTEXT:
+Feature Title: ${featureTitle}
+Feature Description: ${featureDesc}`;
+    
+    if (featureStartDate || featureTargetDate) {
+      parentContext += `\nFeature Timeline: ${featureStartDate ? new Date(featureStartDate).toLocaleDateString() : 'Not set'} to ${featureTargetDate ? new Date(featureTargetDate).toLocaleDateString() : 'Not set'}`;
+      parentContext += `\nIMPORTANT: All tasks should be planned to complete within the Feature timeline.`;
+    }
+  }
+  
+  // Add User Story timeline context if available
+  let timelineContext = '';
+  if (!isFeature && userStoryData) {
+    const storyStartDate = userStoryData.fields['Microsoft.VSTS.Scheduling.StartDate'];
+    const storyFinishDate = userStoryData.fields['Microsoft.VSTS.Scheduling.FinishDate'];
+    if (storyStartDate || storyFinishDate) {
+      timelineContext = `\n\nUSER STORY TIMELINE:
+Start Date: ${storyStartDate ? new Date(storyStartDate).toLocaleDateString() : 'Not set'}
+End Date: ${storyFinishDate ? new Date(storyFinishDate).toLocaleDateString() : 'Not set'}
+IMPORTANT: All tasks must be completed within this timeline.`;
+    }
+  }
+  
   const prompt = isFeature 
     ? `You are an expert Agile project manager. Break down the following Feature into User Stories.
 
@@ -692,10 +734,10 @@ RESPOND WITH ONLY A VALID JSON ARRAY:
     "activity": "Development" | "Testing" | "Design" | "Documentation" | "Deployment" | "Requirements"
   }
 ]`
-    : `You are an expert Agile project manager. Break down the following work item into detailed, actionable development tasks.
+    : `You are an expert Agile project manager. Break down the following work item into detailed, actionable development tasks.${parentContext}
 
-WORK ITEM:
-${userStory}
+USER STORY:
+${userStory}${timelineContext}
 
 DEVELOPER CONTEXT:
 Tasks will be assigned to ${experienceContext}.
@@ -708,6 +750,7 @@ INSTRUCTIONS:
 1. Break down into 2-5 specific, actionable tasks
 2. Total hours MUST NOT exceed ${hoursForAI} hours
 3. Focus on essential tasks only
+4. Tasks should be planned sequentially so they complete within the timeline
 
 RESPOND WITH ONLY A VALID JSON ARRAY:
 [
@@ -908,6 +951,63 @@ function updateTotalEstimate() {
   `;
 }
 
+// Calculate task dates based on hours (6 hours per working day)
+function calculateTaskDates(tasks, startDate = new Date()) {
+  const HOURS_PER_DAY = 6;
+  let currentDate = new Date(startDate);
+  let remainingHoursInDay = HOURS_PER_DAY;
+  
+  // Skip weekends for start date
+  while (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+  
+  const taskDates = [];
+  
+  for (const task of tasks) {
+    const taskHours = task.hours || 4;
+    const taskStartDate = new Date(currentDate);
+    let hoursRemaining = taskHours;
+    
+    // Calculate end date based on hours
+    while (hoursRemaining > 0) {
+      if (hoursRemaining <= remainingHoursInDay) {
+        // Task finishes within current day
+        remainingHoursInDay -= hoursRemaining;
+        hoursRemaining = 0;
+      } else {
+        // Task continues to next day
+        hoursRemaining -= remainingHoursInDay;
+        remainingHoursInDay = HOURS_PER_DAY;
+        currentDate.setDate(currentDate.getDate() + 1);
+        // Skip weekends
+        while (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
+          currentDate.setDate(currentDate.getDate() + 1);
+        }
+      }
+    }
+    
+    const taskEndDate = new Date(currentDate);
+    taskDates.push({
+      taskId: task.id,
+      startDate: taskStartDate,
+      finishDate: taskEndDate
+    });
+    
+    // If we used all hours in the day, move to next day for the next task
+    if (remainingHoursInDay === 0) {
+      remainingHoursInDay = HOURS_PER_DAY;
+      currentDate.setDate(currentDate.getDate() + 1);
+      // Skip weekends
+      while (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+    }
+  }
+  
+  return taskDates;
+}
+
 // Create all items in ADO (Tasks for User Story, User Stories for Feature)
 async function createAllTasksInADO() {
   const { org, project, pat } = getSettings();
@@ -928,13 +1028,34 @@ async function createAllTasksInADO() {
   const workItemTypeToCreate = isFeature ? 'User Story' : 'Task';
   const itemLabel = isFeature ? 'user stories' : 'tasks';
   
+  // Get start date from parent Feature or User Story, or use today
+  let startDate = new Date();
+  if (!isFeature && userStoryData) {
+    const userStoryStartDate = userStoryData.fields['Microsoft.VSTS.Scheduling.StartDate'];
+    if (userStoryStartDate) {
+      startDate = new Date(userStoryStartDate);
+    } else if (parentFeatureData) {
+      const featureStartDate = parentFeatureData.fields['Microsoft.VSTS.Scheduling.StartDate'];
+      if (featureStartDate) startDate = new Date(featureStartDate);
+    }
+  } else if (isFeature && userStoryData) {
+    const featureStartDate = userStoryData.fields['Microsoft.VSTS.Scheduling.StartDate'];
+    if (featureStartDate) startDate = new Date(featureStartDate);
+  }
+  
+  // Calculate dates for all tasks
+  const taskDates = calculateTaskDates(selectedTasks, startDate);
+  
   try {
     showLoading('createLoading', true, `Creating ${selectedTasks.length} ${itemLabel}...`);
     
     const auth = btoa(":" + pat);
     let created = 0, failed = 0;
     
-    for (const task of selectedTasks) {
+    for (let i = 0; i < selectedTasks.length; i++) {
+      const task = selectedTasks[i];
+      const dates = taskDates[i];
+      
       try {
         const body = [
           { "op": "add", "path": "/fields/System.Title", "value": task.title },
@@ -947,12 +1068,18 @@ async function createAllTasksInADO() {
           // For User Stories: use Story Points (Fibonacci: 1,2,3,5,8,13)
           const storyPoints = task.storyPoints || task.hours || 3;
           body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.StoryPoints", "value": storyPoints });
+          // Add Start and Finish dates for User Stories (respecting Feature timeline)
+          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.StartDate", "value": dates.startDate.toISOString() });
+          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.FinishDate", "value": dates.finishDate.toISOString() });
         } else {
-          // For Tasks: use time estimates
+          // For Tasks: use time estimates and calculate dates
           body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.OriginalEstimate", "value": task.hours });
           body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.RemainingWork", "value": task.hours });
           body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.CompletedWork", "value": 0 });
           body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Common.Activity", "value": task.activity || "Development" });
+          // Add calculated Start and Finish dates
+          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.StartDate", "value": dates.startDate.toISOString() });
+          body.push({ "op": "add", "path": "/fields/Microsoft.VSTS.Scheduling.FinishDate", "value": dates.finishDate.toISOString() });
         }
         
         if (areaPath) body.push({ "op": "add", "path": "/fields/System.AreaPath", "value": areaPath });
@@ -1760,22 +1887,70 @@ function applyInsightFilters() {
   analyzeAndDisplayInsights();
 }
 
-function analyzeAndDisplayInsights() {
+async function analyzeAndDisplayInsights() {
   showLoading('insightsLoading', true, `Validating ${filteredInsightWorkItems.length} work items...`);
+  
+  const { org, pat } = getSettings();
+  const auth = btoa(":" + pat);
   
   // Categorize and validate
   const insights = {
     features: [],
     stories: [],
     tasks: [],
-    allItems: [] // Store all for auto-fix
+    allItems: [], // Store all for auto-fix
+    timelineIssues: [] // Track timeline issues
   };
   
+  // First pass: categorize items and build parent-child relationships
+  const storyMap = new Map(); // Map of story ID to story data
+  
+  for (const item of filteredInsightWorkItems) {
+    const type = item.fields['System.WorkItemType'];
+    if (type === 'User Story') {
+      storyMap.set(item.id, {
+        finishDate: item.fields['Microsoft.VSTS.Scheduling.FinishDate'],
+        title: item.fields['System.Title']
+      });
+    }
+  }
+  
+  // Second pass: validate and check timeline issues
   for (const item of filteredInsightWorkItems) {
     const type = item.fields['System.WorkItemType'];
     const validated = validateWorkItem(item, type);
     validated.projectName = item.projectName;
     validated.rawItem = item; // Keep reference for updates
+    
+    // Check timeline issues for Tasks
+    if (type === 'Task') {
+      const taskFinishDate = item.fields['Microsoft.VSTS.Scheduling.FinishDate'];
+      if (taskFinishDate) {
+        // Try to find parent User Story
+        const relations = item.relations || [];
+        const parentUrl = relations
+          .filter(r => r.rel === 'System.LinkTypes.Hierarchy-Reverse')
+          .map(r => r.url)[0];
+        
+        if (parentUrl) {
+          // Extract parent ID from URL
+          const parentIdMatch = parentUrl.match(/workitems\/(\d+)/);
+          if (parentIdMatch) {
+            const parentId = parseInt(parentIdMatch[1]);
+            const parentStory = storyMap.get(parentId);
+            if (parentStory && parentStory.finishDate) {
+              const taskEnd = new Date(taskFinishDate);
+              const storyEnd = new Date(parentStory.finishDate);
+              if (taskEnd > storyEnd) {
+                validated.crossesParentDeadline = true;
+                validated.timelineWarning = `Task ends ${formatDateDiff(taskEnd, storyEnd)} after User Story "${parentStory.title}" deadline (${storyEnd.toLocaleDateString()})`;
+                insights.timelineIssues.push(validated);
+              }
+            }
+          }
+        }
+      }
+    }
     
     insights.allItems.push(validated);
     
@@ -1794,19 +1969,27 @@ function analyzeAndDisplayInsights() {
   displayInsightsResults(insights);
 }
 
+// Helper function to format date difference
+function formatDateDiff(date1, date2) {
+  const diffTime = Math.abs(date1 - date2);
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  if (diffDays === 1) return '1 day';
+  return `${diffDays} days`;
+}
+
 async function analyzeInsights() {
   // This is now handled by fetchUserWorkItems
   await fetchUserWorkItems();
 }
 
 async function fetchWorkItemDetails(org, project, auth, ids) {
-  // Batch fetch in groups of 200
+  // Batch fetch in groups of 200, include relations for parent-child checking
   const batchSize = 200;
   const allItems = [];
   
   for (let i = 0; i < ids.length; i += batchSize) {
     const batch = ids.slice(i, i + batchSize);
-    const url = `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems?ids=${batch.join(',')}&api-version=7.0`;
+    const url = `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems?ids=${batch.join(',')}&$expand=relations&api-version=7.0`;
     
     const response = await fetch(url, {
       headers: { "Authorization": `Basic ${auth}` }
@@ -1823,14 +2006,227 @@ async function fetchWorkItemDetails(org, project, auth, ids) {
 
 function validateWorkItem(item, type) {
   const rules = VALIDATION_RULES[type] || [];
-  const missingFields = [];
+  const missingFields = [];        // Clean labels for auto-fix
+  const invalidFieldLabels = [];   // Clean labels for auto-fix
+  const invalidFieldMessages = []; // Detailed messages for display
+  const dateWarnings = [];
+  
+  // DEBUG: Log all fields in the work item to find correct field names
+  console.log(`\n=== ALL FIELDS FOR ITEM ${item.id} (${type}) ===`);
+  const allFieldNames = Object.keys(item.fields).sort();
+  allFieldNames.forEach(fieldName => {
+    const value = item.fields[fieldName];
+    if (fieldName.toLowerCase().includes('date') || fieldName.toLowerCase().includes('qa') || fieldName.toLowerCase().includes('actual')) {
+      console.log(`  ${fieldName}: ${JSON.stringify(value)}`);
+    }
+  });
+  console.log(`=== END ALL FIELDS ===\n`);
+  
+  // Fields where 0 is a valid value
+  const numericFieldsWhereZeroIsValid = [
+    'Microsoft.VSTS.Scheduling.CompletedWork',
+    'Microsoft.VSTS.Scheduling.RemainingWork'
+  ];
+  
+  // Minimum valid date (anything before 2020 is considered invalid/placeholder)
+  const minValidDate = new Date('2020-01-01');
+  
+  // Get planned dates for comparison
+  const plannedStartDate = item.fields['Microsoft.VSTS.Scheduling.StartDate'];
+  const plannedEndDate = item.fields['Microsoft.VSTS.Scheduling.FinishDate'];
+  const originalEstimate = item.fields['Microsoft.VSTS.Scheduling.OriginalEstimate'];
+  const remainingWork = item.fields['Microsoft.VSTS.Scheduling.RemainingWork'];
+  
+  // Get sprint/iteration end date from iteration path
+  let sprintEndDate = null;
+  const iterationPath = item.fields['System.IterationPath'];
+  // This would need to be fetched from Azure DevOps API in a real scenario
+  // For now, we'll use a placeholder or skip this validation
   
   for (const rule of rules) {
     const value = item.fields[rule.field];
-    if (value === undefined || value === null || value === '' || value === 0) {
+    const isNumericZeroValid = numericFieldsWhereZeroIsValid.includes(rule.field);
+    
+    // Debug: Log each field being checked
+    console.log(`Checking field: ${rule.label} (${rule.field})`, { value, isDateField: rule.isDateField });
+    
+    // Check if field is missing (including string "null")
+    let isMissing = false;
+    if (isNumericZeroValid) {
+      isMissing = (value === undefined || value === null || value === '' || value === 'null');
+    } else {
+      isMissing = (value === undefined || value === null || value === '' || value === 0 || value === 'null');
+    }
+    
+    if (isMissing) {
+      console.log(`  -> Field is MISSING`);
       missingFields.push(rule.label);
+      continue;
+    }
+    
+    // Check date fields for validity
+    if (rule.isDateField && value && value !== 'null') {
+      const dateValue = new Date(value);
+      let isInvalid = false;
+      
+      // Debug logging for date validation
+      console.log(`Validating ${rule.label}: value="${value}", parsed=${dateValue.toISOString()}, minValid=${minValidDate.toISOString()}`);
+      
+      // Check if date parsing failed or date is invalid (before 2020 - likely placeholder)
+      if (isNaN(dateValue.getTime())) {
+        invalidFieldMessages.push(`${rule.label} has invalid date format`);
+        isInvalid = true;
+        console.log(`  -> Invalid: date parsing failed`);
+      } else if (dateValue.getTime() < minValidDate.getTime()) {
+        invalidFieldMessages.push(`${rule.label} (${dateValue.toLocaleDateString()} is invalid - before 2020)`);
+        isInvalid = true;
+        console.log(`  -> Invalid: before 2020 (${dateValue.getTime()} < ${minValidDate.getTime()})`);
+      } else {
+        console.log(`  -> Valid date`);
+      }
+      
+      // Only do further validation if date is valid
+      if (!isInvalid) {
+        // Check Planned End Date (Finish Date) - should be after Start Date
+        if (rule.label === 'Planned End Date' && plannedStartDate) {
+          const startDate = new Date(plannedStartDate);
+          if (!isNaN(startDate.getTime()) && dateValue <= startDate) {
+            invalidFieldMessages.push(`Planned End Date must be after Planned Start Date`);
+            isInvalid = true;
+          }
+        }
+        
+        // Check Task Finish Date - should be after Start Date
+        if (rule.label === 'Finish Date' && type === 'Task') {
+          const taskStartDate = item.fields['Microsoft.VSTS.Scheduling.StartDate'];
+          if (taskStartDate) {
+            const startDate = new Date(taskStartDate);
+            if (!isNaN(startDate.getTime()) && dateValue <= startDate) {
+              invalidFieldMessages.push(`Finish Date (${dateValue.toLocaleDateString()}) must be after Start Date (${startDate.toLocaleDateString()})`);
+              isInvalid = true;
+            }
+          }
+        }
+        
+        // Check QA Ready Date - should be between Planned Start and Planned End
+        if (rule.label === 'QA Ready Date' && plannedStartDate && plannedEndDate) {
+          const startDate = new Date(plannedStartDate);
+          const endDate = new Date(plannedEndDate);
+          if (!isNaN(startDate.getTime()) && !isNaN(endDate.getTime())) {
+            if (dateValue < startDate || dateValue > endDate) {
+              invalidFieldMessages.push(`${rule.label} should be between Planned Start (${startDate.toLocaleDateString()}) and End (${endDate.toLocaleDateString()})`);
+              isInvalid = true;
+            }
+          }
+        }
+        
+        // Check Actual Start Date - should be >= Planned Start Date (or close to it)
+        if (rule.label === 'Actual Start Date' && plannedStartDate) {
+          const startDate = new Date(plannedStartDate);
+          if (!isNaN(startDate.getTime())) {
+            // Allow some flexibility - actual can be slightly before planned
+            const flexStartDate = new Date(startDate);
+            flexStartDate.setDate(flexStartDate.getDate() - 7); // 7 days flexibility
+            if (dateValue < flexStartDate) {
+              invalidFieldMessages.push(`${rule.label} (${dateValue.toLocaleDateString()}) is before Planned Start Date`);
+              isInvalid = true;
+            }
+          }
+        }
+        
+        // Check Actual End Date - should not exceed Planned End Date significantly
+        if (rule.label === 'Actual End Date' && plannedEndDate) {
+          const endDate = new Date(plannedEndDate);
+          if (!isNaN(endDate.getTime()) && dateValue > endDate) {
+            dateWarnings.push(`${rule.label} (${dateValue.toLocaleDateString()}) exceeds Planned End Date (${endDate.toLocaleDateString()})`);
+          }
+        }
+      }
+      
+      // Track clean label for auto-fix
+      if (isInvalid && !invalidFieldLabels.includes(rule.label)) {
+        invalidFieldLabels.push(rule.label);
+      }
     }
   }
+  
+  // Validate Remaining Work vs Original Estimate
+  if (type === 'Task') {
+    const originalEst = item.fields['Microsoft.VSTS.Scheduling.OriginalEstimate'];
+    const remaining = item.fields['Microsoft.VSTS.Scheduling.RemainingWork'];
+    const completed = item.fields['Microsoft.VSTS.Scheduling.CompletedWork'];
+    
+    // Convert to numbers (treating null/undefined/empty as 0 for calculation)
+    const origNum = parseFloat(originalEst) || 0;
+    const remNum = parseFloat(remaining) || 0;
+    const compNum = parseFloat(completed) || 0;
+    
+    // Check if values are mathematically consistent
+    // Original Estimate should equal Remaining + Completed
+    if (origNum > 0 || remNum > 0 || compNum > 0) {
+      const expected = remNum + compNum;
+      if (origNum !== expected) {
+        invalidFieldMessages.push(`Work tracking mismatch: Original Estimate (${origNum}h) ≠ Remaining (${remNum}h) + Completed (${compNum}h) = ${expected}h`);
+        // Mark fields that need recalculation
+        if (origNum === 0 && (remNum > 0 || compNum > 0)) {
+          invalidFieldLabels.push('Original Estimate');
+        } else if (remNum > expected || (origNum > 0 && remNum === 0 && compNum === 0)) {
+          invalidFieldLabels.push('Remaining Work');
+        }
+      }
+    }
+    
+    // Also check: Remaining Work should not exceed Original Estimate
+    if (origNum > 0 && remNum > origNum) {
+      if (!invalidFieldMessages.some(msg => msg.includes('Work tracking mismatch'))) {
+        invalidFieldMessages.push(`Remaining Work (${remNum}h) cannot exceed Original Estimate (${origNum}h)`);
+        if (!invalidFieldLabels.includes('Remaining Work')) {
+          invalidFieldLabels.push('Remaining Work');
+        }
+      }
+    }
+  }
+  
+  // Validate Remaining Work vs Original Estimate for User Stories (if applicable)
+  if (originalEstimate !== undefined && originalEstimate !== null && originalEstimate !== '' &&
+      remainingWork !== undefined && remainingWork !== null && remainingWork !== '') {
+    const original = parseFloat(originalEstimate) || 0;
+    const remaining = parseFloat(remainingWork) || 0;
+    
+    if (remaining > original) {
+      invalidFieldMessages.push(`Remaining Work (${remaining}h) cannot exceed Original Estimate (${original}h)`);
+      if (!invalidFieldLabels.includes('Remaining Work')) {
+        invalidFieldLabels.push('Remaining Work');
+      }
+    }
+  }
+  
+  // Check timeline issues for Tasks
+  let timelineWarning = null;
+  if (type === 'Task') {
+    const taskFinishDate = item.fields['Microsoft.VSTS.Scheduling.FinishDate'];
+    if (taskFinishDate) {
+      const finishDate = new Date(taskFinishDate);
+      if (item.parentEndDate && finishDate > new Date(item.parentEndDate)) {
+        timelineWarning = `Task ends after User Story deadline (${new Date(item.parentEndDate).toLocaleDateString()})`;
+      }
+    }
+  }
+  
+  // Combine all warnings for display
+  const allWarnings = [...invalidFieldMessages, ...dateWarnings];
+  if (timelineWarning) allWarnings.push(timelineWarning);
+  
+  // Fields to fix = missing + invalid
+  const fieldsToFix = [...missingFields, ...invalidFieldLabels];
+  
+  // Debug logging
+  console.log(`Validation result for ${item.id}:`, {
+    missingFields,
+    invalidFieldLabels,
+    invalidFieldMessages,
+    isComplete: missingFields.length === 0 && invalidFieldLabels.length === 0
+  });
   
   return {
     id: item.id,
@@ -1838,8 +2234,48 @@ function validateWorkItem(item, type) {
     type: type,
     state: item.fields['System.State'],
     missingFields: missingFields,
-    isComplete: missingFields.length === 0
+    invalidFields: invalidFieldMessages,      // Detailed messages for display
+    invalidFieldLabels: invalidFieldLabels,   // Clean labels for auto-fix
+    fieldsToFix: fieldsToFix,                 // Combined list for auto-fix
+    isComplete: missingFields.length === 0 && invalidFieldLabels.length === 0,
+    hasIssues: invalidFieldMessages.length > 0 || dateWarnings.length > 0,
+    timelineWarning: allWarnings.length > 0 ? allWarnings.join('; ') : null,
+    finishDate: item.fields['Microsoft.VSTS.Scheduling.FinishDate'],
+    plannedStartDate: plannedStartDate,
+    plannedEndDate: plannedEndDate
   };
+}
+
+// Fetch parent Feature data for a User Story
+async function fetchParentFeatureData(org, project, pat, userStoryData) {
+  if (!userStoryData || !userStoryData.relations) return null;
+  
+  const auth = btoa(":" + pat);
+  const relations = userStoryData.relations || [];
+  
+  // Find parent relation
+  const parentUrl = relations
+    .filter(r => r.rel === 'System.LinkTypes.Hierarchy-Reverse')
+    .map(r => r.url)[0];
+  
+  if (!parentUrl) return null;
+  
+  try {
+    const response = await fetch(parentUrl, {
+      headers: { "Authorization": `Basic ${auth}` }
+    });
+    
+    if (response.ok) {
+      const parentData = await response.json();
+      if (parentData.fields['System.WorkItemType'] === 'Feature') {
+        return parentData;
+      }
+    }
+  } catch (e) {
+    console.error('Error fetching parent Feature:', e);
+  }
+  
+  return null;
 }
 
 function displayInsightsResults(insights) {
@@ -1852,6 +2288,14 @@ function displayInsightsResults(insights) {
   // Count incomplete items
   const incompleteCount = insights.allItems.filter(i => !i.isComplete).length;
   document.getElementById('incompleteCount').textContent = incompleteCount;
+  
+  // Count timeline issues
+  const timelineIssueCount = insights.timelineIssues?.length || 0;
+  const timelineCountEl = document.getElementById('timelineIssueCount');
+  if (timelineCountEl) {
+    timelineCountEl.textContent = timelineIssueCount;
+    timelineCountEl.parentElement.style.display = timelineIssueCount > 0 ? 'flex' : 'none';
+  }
   
   // Show/hide auto-fix button based on incomplete count
   const autoFixSection = document.getElementById('autoFixSection');
@@ -1888,29 +2332,62 @@ function displayInsightsResults(insights) {
 }
 
 function renderInsightItem(item, type) {
-  const suggestion = generateSuggestion(item.missingFields, type);
+  // Get all fields that need fixing for suggestions
+  const fieldsToFix = item.fieldsToFix || item.missingFields || [];
+  const suggestion = generateDateSuggestion(item, type);
   const projectInfo = item.projectName ? `<span class="project-badge">${escapeHtml(item.projectName)}</span>` : '';
   
+  // Check for timeline/date warnings
+  const hasTimelineIssue = item.timelineWarning || item.crossesParentDeadline;
+  const timelineWarningHtml = hasTimelineIssue ? `
+    <div class="timeline-warning">
+      <span class="warning-icon">⏰</span>
+      <span class="warning-text">${escapeHtml(item.timelineWarning || 'Date issue detected!')}</span>
+    </div>
+  ` : '';
+  
+  // Determine status
+  const hasInvalidFields = item.invalidFields && item.invalidFields.length > 0;
+  const hasMissingFields = item.missingFields && item.missingFields.length > 0;
+  const needsFix = hasMissingFields || hasInvalidFields;
+  
+  let statusBadge = '';
+  if (!item.isComplete) {
+    statusBadge = '<span class="status-badge incomplete">⚠️ Incomplete</span>';
+  } else {
+    statusBadge = '<span class="status-badge complete">✅ Complete</span>';
+  }
+  
   return `
-    <div class="insight-item" data-item-id="${item.id}">
+    <div class="insight-item ${hasTimelineIssue ? 'has-timeline-issue' : ''} ${hasInvalidFields ? 'has-invalid-fields' : ''}" data-item-id="${item.id}">
       <div class="insight-item-header">
         <span class="insight-item-id">#${item.id}</span>
         ${projectInfo}
-        <span class="status-badge ${item.isComplete ? 'complete' : 'incomplete'}">
-          ${item.isComplete ? '✅ Complete' : '⚠️ Incomplete'}
-        </span>
+        ${statusBadge}
+        ${hasTimelineIssue ? '<span class="status-badge timeline-issue">⏰ Date Issues</span>' : ''}
       </div>
       <div class="insight-item-title">${escapeHtml(item.title)}</div>
-      ${item.missingFields.length ? `
+      ${timelineWarningHtml}
+      ${hasMissingFields ? `
         <div class="missing-fields">
-          <div class="missing-fields-label">Missing Fields</div>
+          <div class="missing-fields-label">❌ Missing Fields</div>
           <div class="missing-field-tags">
-            ${item.missingFields.map(f => `<span class="missing-field-tag">${escapeHtml(f)}</span>`).join('')}
+            ${item.missingFields.map(f => `<span class="missing-field-tag required">${escapeHtml(f)}</span>`).join('')}
           </div>
         </div>
+      ` : ''}
+      ${hasInvalidFields ? `
+        <div class="missing-fields invalid">
+          <div class="missing-fields-label">🚫 Invalid Values</div>
+          <div class="missing-field-tags">
+            ${item.invalidFields.map(f => `<span class="missing-field-tag invalid">${escapeHtml(f)}</span>`).join('')}
+          </div>
+        </div>
+      ` : ''}
+      ${needsFix ? `
         <div class="insight-suggestion">
-          <div class="insight-suggestion-label">AI Suggestion</div>
-          <div class="insight-suggestion-text">${escapeHtml(suggestion)}</div>
+          <div class="insight-suggestion-label">💡 AI Suggested Fix</div>
+          <div class="insight-suggestion-text">${suggestion}</div>
         </div>
         <div class="insight-actions">
           <button class="btn btn-success btn-sm" data-action="fixItem" data-id="${item.id}" data-type="${item.type}">
@@ -1920,6 +2397,74 @@ function renderInsightItem(item, type) {
       ` : ''}
     </div>
   `;
+}
+
+// Generate intelligent date suggestion based on planned dates
+function generateDateSuggestion(item, type) {
+  const fieldsToFix = item.fieldsToFix || item.missingFields || [];
+  if (fieldsToFix.length === 0) return 'All required fields are filled!';
+  
+  const suggestions = [];
+  const plannedStart = item.plannedStartDate ? new Date(item.plannedStartDate) : null;
+  const plannedEnd = item.plannedEndDate ? new Date(item.plannedEndDate) : null;
+  const originalEstimate = item.rawItem?.fields?.['Microsoft.VSTS.Scheduling.OriginalEstimate'];
+  const storyPoints = item.rawItem?.fields?.['Microsoft.VSTS.Scheduling.StoryPoints'];
+  
+  const formatDate = (date) => {
+    return date.toLocaleDateString('en-GB', { 
+      day: '2-digit', 
+      month: '2-digit', 
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).replace(',', '');
+  };
+  
+  for (const field of fieldsToFix) {
+    if (field === 'QA Ready Date' && plannedEnd) {
+      const qaDate = new Date(plannedEnd);
+      qaDate.setDate(qaDate.getDate() - 2);
+      suggestions.push(`<strong>QA Ready Date</strong>: ${formatDate(qaDate)} (2 days before Planned End)`);
+    } else if (field === 'Actual Start Date' && plannedStart) {
+      suggestions.push(`<strong>Actual Start Date</strong>: ${formatDate(plannedStart)} (same as Planned Start)`);
+    } else if (field === 'Actual End Date' && plannedEnd) {
+      suggestions.push(`<strong>Actual End Date</strong>: ${formatDate(plannedEnd)} (same as Planned End)`);
+    } else if (field === 'Planned End Date' && type === 'story' && plannedStart && storyPoints) {
+      // Calculate User Story Planned End Date based on Story Points
+      const points = parseFloat(storyPoints) || 3;
+      const hoursPerPoint = 8;
+      const hoursPerDay = 6;
+      const totalHours = points * hoursPerPoint;
+      const daysNeeded = Math.ceil(totalHours / hoursPerDay);
+      const endDate = new Date(plannedStart);
+      endDate.setDate(endDate.getDate() + daysNeeded - 1);
+      suggestions.push(`<strong>Planned End Date</strong>: ${formatDate(endDate)} (${points} SP × 8h = ${totalHours}h @ 6h/day = ${daysNeeded} days)`);
+    } else if (field === 'Finish Date' && type === 'task' && plannedStart && originalEstimate) {
+      // Calculate Task Finish Date based on Original Estimate
+      const hours = parseFloat(originalEstimate) || 4;
+      const hoursPerDay = 6;
+      const daysNeeded = Math.ceil(hours / hoursPerDay);
+      const finishDate = new Date(plannedStart);
+      if (hours > hoursPerDay) {
+        finishDate.setDate(finishDate.getDate() + (daysNeeded - 1));
+      }
+      suggestions.push(`<strong>Finish Date</strong>: ${formatDate(finishDate)} (${hours}h @ 6h/day = ${daysNeeded} day${daysNeeded > 1 ? 's' : ''})`);
+    } else if (field === 'Planned Start Date') {
+      suggestions.push(`<strong>Planned Start Date</strong>: Set based on sprint planning`);
+    } else if (field === 'Planned End Date') {
+      suggestions.push(`<strong>Planned End Date</strong>: Set based on sprint end date`);
+    } else if (field === 'Story Points') {
+      suggestions.push(`<strong>Story Points</strong>: Estimate complexity (1,2,3,5,8,13)`);
+    } else if (field === 'Priority') {
+      suggestions.push(`<strong>Priority</strong>: 2 (High)`);
+    } else if (field === 'Risk') {
+      suggestions.push(`<strong>Risk</strong>: 2 - Medium`);
+    } else {
+      suggestions.push(`<strong>${field}</strong>: Will be auto-filled`);
+    }
+  }
+  
+  return suggestions.join('<br>');
 }
 
 // Event handler for insights clicks
@@ -1962,55 +2507,172 @@ function generateSuggestion(missingFields, type) {
 }
 
 // Generate default values for missing fields
-function generateDefaultValues(missingFields, type, itemTitle) {
+// plannedStart and plannedEnd are ISO date strings from the work item
+// For Tasks: originalEstimate contains work tracking values from the item
+function generateDefaultValues(fieldsToFix, type, itemTitle, plannedStart, plannedEnd, originalEstimate, workTrackingData) {
   const today = new Date();
-  const nextWeek = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+  
+  // Use planned dates if available, otherwise use defaults
+  const plannedStartDate = plannedStart ? new Date(plannedStart) : today;
+  let plannedEndDate = plannedEnd ? new Date(plannedEnd) : new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+  
+  // Calculate User Story Planned End Date based on Story Points (if not available)
+  if (type === 'User Story' && !plannedEnd) {
+    // Get Story Points from the item (will be in fieldsToFix or already set)
+    const storyPoints = originalEstimate || 3; // Use originalEstimate parameter for story points
+    const hoursPerPoint = 8; // Assuming 8 hours per story point
+    const hoursPerDay = 6;
+    const totalHours = storyPoints * hoursPerPoint;
+    const daysNeeded = Math.ceil(totalHours / hoursPerDay);
+    
+    plannedEndDate = new Date(plannedStartDate);
+    plannedEndDate.setDate(plannedEndDate.getDate() + daysNeeded - 1);
+  }
+  
+  // Calculate QA Ready Date: 2 days before planned end
+  const qaReadyDate = new Date(plannedEndDate);
+  qaReadyDate.setDate(qaReadyDate.getDate() - 2);
+  
+  // Calculate default dates based on planned dates
   const twoWeeks = new Date(today.getTime() + 14 * 24 * 60 * 60 * 1000);
   
+  // For Task work tracking: Calculate Original Estimate, Remaining, and Completed
+  let calcOriginal = 4;
+  let calcRemaining = 4;
+  let calcCompleted = 0;
+  
+  if (type === 'Task' && workTrackingData) {
+    const orig = parseFloat(workTrackingData.original) || 0;
+    const rem = parseFloat(workTrackingData.remaining) || 0;
+    const comp = parseFloat(workTrackingData.completed) || 0;
+    
+    // Apply formula: Original = Remaining + Completed
+    // If 2 values exist, calculate the third
+    if (orig > 0 && comp > 0) {
+      // Have Original and Completed, calculate Remaining
+      calcOriginal = orig;
+      calcCompleted = comp;
+      calcRemaining = Math.max(0, orig - comp);
+    } else if (orig > 0 && rem > 0) {
+      // Have Original and Remaining, calculate Completed
+      calcOriginal = orig;
+      calcRemaining = rem;
+      calcCompleted = Math.max(0, orig - rem);
+    } else if (rem > 0 && comp > 0) {
+      // Have Remaining and Completed, calculate Original
+      calcRemaining = rem;
+      calcCompleted = comp;
+      calcOriginal = rem + comp;
+    } else if (orig > 0) {
+      // Only have Original
+      calcOriginal = orig;
+      calcRemaining = orig;
+      calcCompleted = 0;
+    } else if (rem > 0) {
+      // Only have Remaining
+      calcRemaining = rem;
+      calcOriginal = rem;
+      calcCompleted = 0;
+    } else if (comp > 0) {
+      // Only have Completed
+      calcCompleted = comp;
+      calcOriginal = comp;
+      calcRemaining = 0;
+    } else {
+      // None exist - use AI estimate based on title (simple heuristic)
+      // TODO: Could call AI API here for better estimates
+      const titleWords = itemTitle?.toLowerCase() || '';
+      if (titleWords.includes('complex') || titleWords.includes('integration')) {
+        calcOriginal = 8;
+      } else if (titleWords.includes('simple') || titleWords.includes('fix')) {
+        calcOriginal = 2;
+      } else {
+        calcOriginal = 4;
+      }
+      calcRemaining = calcOriginal;
+      calcCompleted = 0;
+    }
+  }
+  
+  // For Remaining Work, use calculated value for Tasks, or Original Estimate for User Stories
+  const defaultRemainingWork = type === 'Task' ? calcRemaining : 
+    (originalEstimate !== undefined && originalEstimate !== null && originalEstimate !== '' ? originalEstimate : 4);
+  
+  // Calculate Task Finish Date based on Original Estimate (6 hours per day)
+  let taskFinishDate = plannedEndDate;
+  if (type === 'Task') {
+    const hours = calcOriginal || 4;
+    const hoursPerDay = 6;
+    const daysNeeded = Math.ceil(hours / hoursPerDay);
+    
+    // Start from the task's start date
+    const taskStart = plannedStartDate;
+    taskFinishDate = new Date(taskStart);
+    
+    // If hours <= 6, finish same day; otherwise add days
+    if (hours > hoursPerDay) {
+      taskFinishDate.setDate(taskFinishDate.getDate() + (daysNeeded - 1));
+    }
+  }
+  
+  // Define default values - Risk uses string enum values for Azure DevOps
   const defaults = {
     'Priority': 2, // High
-    'Risk': 2, // Medium
+    'Risk': '2 - Medium', // Risk is a string enum: "1 - High", "2 - Medium", "3 - Low"
     'Effort': 8,
     'Business Value': 50,
     'Time Criticality': 50,
-    'Start Date': today.toISOString(),
+    'Start Date': plannedStartDate.toISOString(),
     'Target Date': twoWeeks.toISOString(),
-    'Planned Start Date': today.toISOString(),
-    'Planned End Date': nextWeek.toISOString(),
+    'Planned Start Date': plannedStartDate.toISOString(),
+    'Planned End Date': plannedEndDate.toISOString(),
     'Story Points': 3,
-    'QA Ready Date': nextWeek.toISOString(),
-    'Original Estimate': 4,
-    'Remaining Work': 4,
-    'Completed Work': 0,
+    'QA Ready Date': qaReadyDate.toISOString(),              // 2 days before planned end
+    'Original Estimate': calcOriginal,                       // Calculated based on existing values
+    'Remaining Work': calcRemaining,                         // Calculated: Original - Completed
+    'Completed Work': calcCompleted,                         // From existing or 0
     'Activity': 'Development',
-    'Finish Date': nextWeek.toISOString(),
-    'Actual Start Date': today.toISOString(),
-    'Actual End Date': nextWeek.toISOString()
+    'Finish Date': taskFinishDate.toISOString(),             // Calculated for Tasks based on Original Estimate
+    'Actual Start Date': plannedStartDate.toISOString(),    // Same as planned start
+    'Actual End Date': plannedEndDate.toISOString()         // Same as planned end
   };
   
-  const fieldMapping = {
-    'Priority': 'Microsoft.VSTS.Common.Priority',
-    'Risk': 'Microsoft.VSTS.Common.Risk',
-    'Effort': 'Microsoft.VSTS.Scheduling.Effort',
-    'Business Value': 'Microsoft.VSTS.Common.BusinessValue',
-    'Time Criticality': 'Microsoft.VSTS.Common.TimeCriticality',
-    'Start Date': 'Microsoft.VSTS.Scheduling.StartDate',
-    'Target Date': 'Microsoft.VSTS.Scheduling.TargetDate',
-    'Planned Start Date': 'Microsoft.VSTS.Scheduling.StartDate',
-    'Planned End Date': 'Microsoft.VSTS.Scheduling.FinishDate',
-    'Story Points': 'Microsoft.VSTS.Scheduling.StoryPoints',
-    'QA Ready Date': 'Custom.QAReadyDate',
-    'Original Estimate': 'Microsoft.VSTS.Scheduling.OriginalEstimate',
-    'Remaining Work': 'Microsoft.VSTS.Scheduling.RemainingWork',
-    'Completed Work': 'Microsoft.VSTS.Scheduling.CompletedWork',
-    'Activity': 'Microsoft.VSTS.Common.Activity',
-    'Finish Date': 'Microsoft.VSTS.Scheduling.FinishDate',
-    'Actual Start Date': 'Microsoft.VSTS.Scheduling.ActualStartDate',
-    'Actual End Date': 'Microsoft.VSTS.Scheduling.ActualEndDate'
+  // Different field mappings based on work item type
+  const fieldMappingByType = {
+    'Feature': {
+      'Priority': 'Microsoft.VSTS.Common.Priority',
+      'Risk': 'Microsoft.VSTS.Common.Risk',
+      'Effort': 'Microsoft.VSTS.Scheduling.Effort',
+      'Business Value': 'Microsoft.VSTS.Common.BusinessValue',
+      'Time Criticality': 'Microsoft.VSTS.Common.TimeCriticality',
+      'Start Date': 'Microsoft.VSTS.Scheduling.StartDate',
+      'Target Date': 'Microsoft.VSTS.Scheduling.TargetDate'
+    },
+    'User Story': {
+      'Story Points': 'Microsoft.VSTS.Scheduling.StoryPoints',
+      'Priority': 'Microsoft.VSTS.Common.Priority',
+      'Risk': 'Microsoft.VSTS.Common.Risk',
+      'QA Ready Date': 'Custom.QAReadyDateK',
+      'Planned Start Date': 'Microsoft.VSTS.Scheduling.StartDate',
+      'Planned End Date': 'Microsoft.VSTS.Scheduling.FinishDate',
+      'Actual Start Date': 'Custom.ActualStartDateK',
+      'Actual End Date': 'Custom.ActualEndDateK'
+    },
+    'Task': {
+      'Priority': 'Microsoft.VSTS.Common.Priority',
+      'Activity': 'Microsoft.VSTS.Common.Activity',
+      'Start Date': 'Microsoft.VSTS.Scheduling.StartDate',
+      'Finish Date': 'Microsoft.VSTS.Scheduling.FinishDate',
+      'Original Estimate': 'Microsoft.VSTS.Scheduling.OriginalEstimate',
+      'Remaining Work': 'Microsoft.VSTS.Scheduling.RemainingWork',
+      'Completed Work': 'Microsoft.VSTS.Scheduling.CompletedWork'
+    }
   };
+  
+  const fieldMapping = fieldMappingByType[type] || fieldMappingByType['Task'];
   
   const updates = [];
-  for (const field of missingFields) {
+  for (const field of fieldsToFix) {
     const apiField = fieldMapping[field];
     const value = defaults[field];
     if (apiField && value !== undefined) {
@@ -2050,7 +2712,34 @@ async function autoFixSingleItem(itemId, itemType) {
   try {
     showLoading('insightsLoading', true, `Updating item #${itemId}...`);
     
-    const updates = generateDefaultValues(item.missingFields, itemType, item.title);
+    // Use fieldsToFix which includes both missing and invalid fields
+    const fieldsToFix = item.fieldsToFix || item.missingFields || [];
+    
+    // For Tasks: pass Original Estimate; For User Stories: pass Story Points
+    let estimateValue;
+    let workTrackingData = null;
+    
+    if (itemType === 'Task') {
+      // Get all work tracking fields for calculation
+      workTrackingData = {
+        original: item.rawItem?.fields?.['Microsoft.VSTS.Scheduling.OriginalEstimate'],
+        remaining: item.rawItem?.fields?.['Microsoft.VSTS.Scheduling.RemainingWork'],
+        completed: item.rawItem?.fields?.['Microsoft.VSTS.Scheduling.CompletedWork']
+      };
+      estimateValue = workTrackingData.original;
+    } else if (itemType === 'User Story') {
+      estimateValue = item.rawItem?.fields?.['Microsoft.VSTS.Scheduling.StoryPoints'];
+    }
+    
+    const updates = generateDefaultValues(
+      fieldsToFix, 
+      itemType, 
+      item.title,
+      item.plannedStartDate,
+      item.plannedEndDate,
+      estimateValue,
+      workTrackingData
+    );
     
     if (updates.length === 0) {
       showLoading('insightsLoading', false);
@@ -2074,7 +2763,7 @@ async function autoFixSingleItem(itemId, itemType) {
     showLoading('insightsLoading', false);
     
     if (response.ok) {
-      showResult(`✓ Updated ${item.missingFields.length} fields in #${itemId}`, 'success');
+      showResult(`✓ Updated ${updates.length} fields in #${itemId}`, 'success');
       // Refresh the insights
       applyInsightFilters();
     } else {

@@ -1511,3 +1511,118 @@ body {
   padding: 6px 12px;
   font-size: 12px;
 }
+
+/* ============================================
+   Timeline Warning Styles
+   ============================================ */
+
+.timeline-warning {
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+  border: 1px solid #ef4444;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 10px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.timeline-warning .warning-icon {
+  font-size: 20px;
+  margin-bottom: 0;
+}
+
+.timeline-warning .warning-text {
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.insight-item.has-timeline-issue {
+  border-left: 3px solid #ef4444;
+}
+
+.status-badge.timeline-issue {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  color: white;
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 12px;
+}
+
+.summary-card.timeline-issues {
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+  border: 1px solid #ef4444;
+}
+
+.summary-card.timeline-issues .summary-icon {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+}
+
+.summary-card.timeline-issues .summary-count {
+  color: #b91c1c;
+}
+
+/* Optional/Custom Fields Styles */
+.missing-fields.optional {
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border: 1px solid #0ea5e9;
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 8px;
+}
+
+.missing-fields.optional .missing-fields-label {
+  color: #0369a1;
+  font-size: 11px;
+}
+
+.missing-field-tag.optional {
+  background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+  color: #0369a1;
+  border: 1px solid #7dd3fc;
+}
+
+.missing-field-tag.required {
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+  color: #b91c1c;
+  border: 1px solid #fca5a5;
+}
+
+.status-badge.partial {
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  color: #92400e;
+  font-size: 10px;
+}
+
+.insight-item.has-optional-missing {
+  border-left: 3px solid #0ea5e9;
+}
+
+/* Invalid Fields Styles */
+.missing-fields.invalid {
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+  border: 1px solid #ef4444;
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 8px;
+}
+
+.missing-fields.invalid .missing-fields-label {
+  color: #b91c1c;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.missing-field-tag.invalid {
+  background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+  color: #991b1b;
+  border: 1px solid #f87171;
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+.insight-item.has-invalid-fields {
+  border-left: 4px solid #ef4444 !important;
+  background: linear-gradient(135deg, #fef2f2 0%, #ffffff 100%);
+}
