@@ -101,6 +101,9 @@ function setupEventListeners() {
     btn.onclick = () => selectWorkItemType(btn);
   });
   
+  // Initialize hint text for default selection (User Story)
+  initializeWorkItemTypeHint();
+  
   // Tab 1: Create Task
   document.getElementById('fetchWorkItem').onclick = fetchWorkItem;
   document.getElementById('generateTasks').onclick = generateTasks;
@@ -381,21 +384,39 @@ function selectWorkItemType(btn) {
   selectedWorkItemType = btn.dataset.type;
   
   // Update hint text based on selection
-  const hintEl = document.getElementById('workItemTypeHint');
-  if (hintEl) {
-    if (selectedWorkItemType === 'Feature') {
-      hintEl.textContent = 'Feature → Creates User Stories (max 3)';
-    } else {
-      hintEl.textContent = 'User Story → Creates Tasks';
-    }
-  }
+  updateWorkItemTypeHint();
   
   // Update button text
   const generateBtnText = document.getElementById('generateBtnText');
   if (generateBtnText) {
     generateBtnText.textContent = selectedWorkItemType === 'Feature' 
-      ? 'Generate User Story with AI' 
+      ? 'Generate User Stories with AI' 
       : 'Generate Tasks with AI';
+  }
+}
+
+// Initialize hint text on page load
+function initializeWorkItemTypeHint() {
+  updateWorkItemTypeHint();
+  
+  // Also update button text
+  const generateBtnText = document.getElementById('generateBtnText');
+  if (generateBtnText) {
+    generateBtnText.textContent = selectedWorkItemType === 'Feature' 
+      ? 'Generate User Stories with AI' 
+      : 'Generate Tasks with AI';
+  }
+}
+
+// Update hint text based on current selection
+function updateWorkItemTypeHint() {
+  const hintEl = document.getElementById('workItemTypeHint');
+  if (hintEl) {
+    if (selectedWorkItemType === 'Feature') {
+      hintEl.textContent = '🎯 Feature → Creates User Stories (max 3 with Fibonacci Story Points)';
+    } else {
+      hintEl.textContent = '📖 User Story → Creates Tasks (with hour estimates)';
+    }
   }
 }
 
