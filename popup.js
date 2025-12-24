@@ -712,7 +712,7 @@ DEVELOPER CONTEXT:
 User Stories will be assigned to ${experienceContext}.
 
 INSTRUCTIONS:
-1. Break down into 1-3 specific, actionable User Stories (MAXIMUM 3)
+1. Break down into 1-2 specific, actionable User Stories (MAXIMUM 2)
 2. Each User Story should be independently deliverable
 3. Include clear acceptance criteria in the description
 4. Follow the format: "As a [user], I want [feature], so that [benefit]"
