@@ -2096,13 +2096,13 @@ function validateWorkItem(item, type) {
           }
         }
         
-        // Check Task Finish Date - should be after Start Date
+        // Check Task Finish Date - should be after or same as Start Date (allow same-day tasks)
         if (rule.label === 'Finish Date' && type === 'Task') {
           const taskStartDate = item.fields['Microsoft.VSTS.Scheduling.StartDate'];
           if (taskStartDate) {
             const startDate = new Date(taskStartDate);
-            if (!isNaN(startDate.getTime()) && dateValue <= startDate) {
-              invalidFieldMessages.push(`Finish Date (${dateValue.toLocaleDateString()}) must be after Start Date (${startDate.toLocaleDateString()})`);
+            if (!isNaN(startDate.getTime()) && dateValue < startDate) {
+              invalidFieldMessages.push(`Finish Date (${dateValue.toLocaleDateString()}) cannot be before Start Date (${startDate.toLocaleDateString()})`);
               isInvalid = true;
             }
           }
@@ -2169,9 +2169,20 @@ function validateWorkItem(item, type) {
         invalidFieldMessages.push(`Work tracking mismatch: Original Estimate (${origNum}h) ≠ Remaining (${remNum}h) + Completed (${compNum}h) = ${expected}h`);
         // Mark fields that need recalculation
         if (origNum === 0 && (remNum > 0 || compNum > 0)) {
+          // Missing Original - need to calculate it
           invalidFieldLabels.push('Original Estimate');
-        } else if (remNum > expected || (origNum > 0 && remNum === 0 && compNum === 0)) {
+        } else if (origNum > 0 && remNum > 0 && compNum === 0) {
+          // Have Original and Remaining, need to calculate Completed
+          invalidFieldLabels.push('Completed Work');
+        } else if (origNum > 0 && remNum === 0 && compNum === 0) {
+          // Have Original but missing work breakdown
           invalidFieldLabels.push('Remaining Work');
+        } else if (remNum > origNum) {
+          // Remaining exceeds Original - fix Remaining
+          invalidFieldLabels.push('Remaining Work');
+        } else {
+          // Generic mismatch - fix Completed Work as it's usually the field to update
+          invalidFieldLabels.push('Completed Work');
         }
       }
     }
@@ -2448,7 +2459,8 @@ function generateDateSuggestion(item, type) {
       if (hours > hoursPerDay) {
         finishDate.setDate(finishDate.getDate() + (daysNeeded - 1));
       }
-      suggestions.push(`<strong>Finish Date</strong>: ${formatDate(finishDate)} (${hours}h @ 6h/day = ${daysNeeded} day${daysNeeded > 1 ? 's' : ''})`);
+      const dayText = daysNeeded === 1 ? 'same day' : `${daysNeeded} days`;
+      suggestions.push(`<strong>Finish Date</strong>: ${formatDate(finishDate)} (${hours}h @ 6h/day = ${dayText})`);
     } else if (field === 'Planned Start Date') {
       suggestions.push(`<strong>Planned Start Date</strong>: Set based on sprint planning`);
     } else if (field === 'Planned End Date') {
@@ -2459,6 +2471,24 @@ function generateDateSuggestion(item, type) {
       suggestions.push(`<strong>Priority</strong>: 2 (High)`);
     } else if (field === 'Risk') {
       suggestions.push(`<strong>Risk</strong>: 2 - Medium`);
+    } else if (field === 'Original Estimate' || field === 'Remaining Work' || field === 'Completed Work') {
+      // Get work tracking data for calculation
+      const orig = parseFloat(item.rawItem?.fields?.['Microsoft.VSTS.Scheduling.OriginalEstimate']) || 0;
+      const rem = parseFloat(item.rawItem?.fields?.['Microsoft.VSTS.Scheduling.RemainingWork']) || 0;
+      const comp = parseFloat(item.rawItem?.fields?.['Microsoft.VSTS.Scheduling.CompletedWork']) || 0;
+      
+      if (field === 'Completed Work' && orig > 0 && rem > 0) {
+        const calculated = Math.max(0, orig - rem);
+        suggestions.push(`<strong>Completed Work</strong>: ${calculated}h (Original ${orig}h - Remaining ${rem}h)`);
+      } else if (field === 'Remaining Work' && orig > 0 && comp > 0) {
+        const calculated = Math.max(0, orig - comp);
+        suggestions.push(`<strong>Remaining Work</strong>: ${calculated}h (Original ${orig}h - Completed ${comp}h)`);
+      } else if (field === 'Original Estimate' && rem > 0 && comp > 0) {
+        const calculated = rem + comp;
+        suggestions.push(`<strong>Original Estimate</strong>: ${calculated}h (Remaining ${rem}h + Completed ${comp}h)`);
+      } else {
+        suggestions.push(`<strong>${field}</strong>: Will be calculated based on work tracking formula`);
+      }
     } else {
       suggestions.push(`<strong>${field}</strong>: Will be auto-filled`);
     }
@@ -2698,8 +2728,15 @@ async function autoFixSingleItem(itemId, itemType) {
   
   // Find the item in current insights
   const item = currentInsights?.allItems.find(i => i.id === itemId);
-  if (!item || item.isComplete) {
-    showResult('Item not found or already complete', 'error');
+  if (!item) {
+    showResult('Item not found', 'error');
+    return;
+  }
+  
+  // Check if there are actually fields to fix
+  const fieldsToFix = item.fieldsToFix || item.missingFields || [];
+  if (fieldsToFix.length === 0 && !item.hasIssues) {
+    showResult('No fields to fix - item is already complete', 'error');
     return;
   }
   
