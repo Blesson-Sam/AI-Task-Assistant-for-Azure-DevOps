@@ -9,7 +9,6 @@ let iterationPath = null;
 let assignedTo = null;
 let areaPath = null;
 let selectedWorkItemType = 'User Story';
-let selectedAIProvider = 'groq'; // Default AI provider
 
 // Parent Feature data (for context and date validation)
 let parentFeatureData = null;
@@ -19,20 +18,12 @@ let currentEvaluation = null;
 let currentEvalStoryId = null;
 let currentEvalStoryData = null;
 
-// AI Provider configurations
-const AI_PROVIDERS = {
-  groq: {
-    name: 'Groq',
-    model: 'llama-3.1-8b-instant',
-    endpoint: 'https://api.groq.com/openai/v1/chat/completions',
-    description: 'Free and fast, uses Llama 3.1'
-  },
-  openai: {
-    name: 'OpenAI',
-    model: 'gpt-4o-mini',
-    endpoint: 'https://api.openai.com/v1/chat/completions',
-    description: 'Paid, more advanced capabilities'
-  }
+// AI Provider configuration
+const AI_CONFIG = {
+  name: 'GPT-5.2-Chat',
+  model: 'gpt-5.2-chat',
+  endpoint: 'https://raja-mkdvd70u-eastus2.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview',
+  description: 'Azure OpenAI GPT-5.2-Chat'
 };
 
 // Experience level multipliers and descriptions
@@ -107,6 +98,7 @@ function setupEventListeners() {
   document.getElementById('closeSettings').onclick = closeSettingsModal;
   document.getElementById('saveSettings').onclick = saveSettings;
   document.getElementById('testConnection').onclick = testADOConnection;
+  document.getElementById('toggleApiKeyVisibility').onclick = () => togglePasswordVisibility('apiKey');
   
   // Close modal on overlay click
   document.getElementById('settingsModal').onclick = (e) => {
@@ -156,30 +148,7 @@ function setupEventListeners() {
   
   // Security controls
   document.getElementById('togglePatVisibility').onclick = () => togglePasswordVisibility('pat');
-  document.getElementById('toggleGroqVisibility').onclick = () => togglePasswordVisibility('groq');
-  document.getElementById('toggleOpenaiVisibility').onclick = () => togglePasswordVisibility('openaiKey');
-  document.getElementById('aiProvider').onchange = handleAIProviderChange;
   document.getElementById('clearAllData').onclick = clearAllStoredData;
-}
-
-// Handle AI provider change
-function handleAIProviderChange() {
-  const provider = document.getElementById('aiProvider').value;
-  selectedAIProvider = provider;
-  
-  const groqGroup = document.getElementById('groqKeyGroup');
-  const openaiGroup = document.getElementById('openaiKeyGroup');
-  const hintEl = document.getElementById('aiProviderHint');
-  
-  if (provider === 'groq') {
-    groqGroup.classList.remove('hidden');
-    openaiGroup.classList.add('hidden');
-    hintEl.textContent = '🆓 Groq is free and fast. Great for everyday use!';
-  } else if (provider === 'openai') {
-    groqGroup.classList.add('hidden');
-    openaiGroup.classList.remove('hidden');
-    hintEl.textContent = '💎 OpenAI GPT-4o-mini offers advanced capabilities.';
-  }
 }
 
 // Toggle password visibility
@@ -253,8 +222,7 @@ function closeSettingsModal() {
     // Keep in session memory but will be cleared on popup close
     sessionCredentials = {
       pat: document.getElementById('pat').value,
-      groqKey: document.getElementById('groq').value,
-      openaiKey: document.getElementById('openaiKey').value
+      apiKey: document.getElementById('apiKey').value
     };
   }
 }
@@ -262,8 +230,7 @@ function closeSettingsModal() {
 // Session-only credentials (not persisted)
 let sessionCredentials = {
   pat: null,
-  groqKey: null,
-  openaiKey: null
+  apiKey: null
 };
 
 // Load remember preference
@@ -283,28 +250,19 @@ function loadRememberPreference() {
 // Load saved settings from chrome storage
 function loadSettings() {
   if (typeof chrome !== 'undefined' && chrome.storage) {
-    chrome.storage.local.get(['org', 'project', 'pat', 'groqKey', 'openaiKey', 'rememberCredentials', 'aiProvider'], (data) => {
+    chrome.storage.local.get(['org', 'project', 'pat', 'apiKey', 'rememberCredentials'], (data) => {
       if (data.org) document.getElementById('org').value = data.org;
       if (data.project) document.getElementById('project').value = data.project;
-      
-      // Load AI provider
-      if (data.aiProvider) {
-        document.getElementById('aiProvider').value = data.aiProvider;
-        selectedAIProvider = data.aiProvider;
-        handleAIProviderChange(); // Update UI
-      }
       
       // Only load sensitive data if "remember" was enabled
       if (data.rememberCredentials !== false) {
         if (data.pat) document.getElementById('pat').value = data.pat;
-        if (data.groqKey) document.getElementById('groq').value = data.groqKey;
-        if (data.openaiKey) document.getElementById('openaiKey').value = data.openaiKey;
+        if (data.apiKey) document.getElementById('apiKey').value = data.apiKey;
       }
       
       // Also check session credentials
       if (sessionCredentials.pat) document.getElementById('pat').value = sessionCredentials.pat;
-      if (sessionCredentials.groqKey) document.getElementById('groq').value = sessionCredentials.groqKey;
-      if (sessionCredentials.openaiKey) document.getElementById('openaiKey').value = sessionCredentials.openaiKey;
+      if (sessionCredentials.apiKey) document.getElementById('apiKey').value = sessionCredentials.apiKey;
     });
   }
 }
@@ -312,33 +270,26 @@ function loadSettings() {
 // Save settings to chrome storage
 function saveSettings() {
   const remember = document.getElementById('rememberCredentials').checked;
-  const aiProvider = document.getElementById('aiProvider').value;
   
   const settings = {
     org: document.getElementById('org').value,
     project: document.getElementById('project').value,
-    rememberCredentials: remember,
-    aiProvider: aiProvider
+    rememberCredentials: remember
   };
-  
-  // Update global provider
-  selectedAIProvider = aiProvider;
   
   // Only save sensitive data if "remember" is checked
   if (remember) {
     settings.pat = document.getElementById('pat').value;
-    settings.groqKey = document.getElementById('groq').value;
-    settings.openaiKey = document.getElementById('openaiKey').value;
+    settings.apiKey = document.getElementById('apiKey').value;
   } else {
     // Store in session only
     sessionCredentials = {
       pat: document.getElementById('pat').value,
-      groqKey: document.getElementById('groq').value,
-      openaiKey: document.getElementById('openaiKey').value
+      apiKey: document.getElementById('apiKey').value
     };
     // Clear from persistent storage
     if (typeof chrome !== 'undefined' && chrome.storage) {
-      chrome.storage.local.remove(['pat', 'groqKey', 'openaiKey']);
+      chrome.storage.local.remove(['pat', 'apiKey']);
     }
   }
   
@@ -362,17 +313,11 @@ function clearAllStoredData() {
         document.getElementById('org').value = '';
         document.getElementById('project').value = '';
         document.getElementById('pat').value = '';
-        document.getElementById('groq').value = '';
-        document.getElementById('openaiKey').value = '';
-        document.getElementById('aiProvider').value = 'groq';
+        document.getElementById('apiKey').value = '';
         document.getElementById('rememberCredentials').checked = true;
         
-        // Reset AI provider
-        selectedAIProvider = 'groq';
-        handleAIProviderChange();
-        
         // Clear session
-        sessionCredentials = { pat: null, groqKey: null, openaiKey: null };
+        sessionCredentials = { pat: null, apiKey: null };
         
         showResult('All stored data cleared!', 'success');
       });
@@ -608,8 +553,7 @@ async function generateTasks() {
   }
   
   if (!aiApiKey) {
-    const providerName = AI_PROVIDERS[selectedAIProvider].name;
-    showResult(`Please enter your ${providerName} API Key in Settings`, 'error');
+    showResult(`Please enter your ${AI_CONFIG.name} API Key in Settings`, 'error');
     return;
   }
   
@@ -631,8 +575,7 @@ async function generateTasks() {
   }
   
   try {
-    const providerName = AI_PROVIDERS[selectedAIProvider].name;
-    showLoading('createLoading', true, `${providerName} AI is analyzing and breaking down the work item...`);
+    showLoading('createLoading', true, `${AI_CONFIG.name} AI is analyzing and breaking down the work item...`);
     
     const experienceContext = EXPERIENCE_CONFIG[level].promptContext;
     const multiplier = EXPERIENCE_CONFIG[level].multiplier;
@@ -661,7 +604,7 @@ async function generateTasks() {
   }
 }
 
-// Call AI API (supports Groq and OpenAI)
+// Call AI API (Azure OpenAI GPT-5.2-Chat)
 async function callAI(userStory, experienceContext, apiKey, hoursForAI, totalHoursAvailable) {
   // Determine what to generate based on selected work item type
   const isFeature = selectedWorkItemType === 'Feature';
@@ -763,17 +706,13 @@ RESPOND WITH ONLY A VALID JSON ARRAY:
   }
 ]`;
 
-  // Get the appropriate API key and provider config
-  const provider = AI_PROVIDERS[selectedAIProvider];
-  
-  const response = await fetch(provider.endpoint, {
+  const response = await fetch(AI_CONFIG.endpoint, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${apiKey}`,
+      "api-key": apiKey,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: provider.model,
       messages: [
         { role: "system", content: "You output only valid JSON arrays. No markdown, no explanations." },
         { role: "user", content: prompt }
@@ -1184,8 +1123,7 @@ async function fetchAndEvaluate() {
   }
   
   if (!aiApiKey) {
-    const providerName = AI_PROVIDERS[selectedAIProvider].name;
-    showResult(`Please configure ${providerName} API Key in Settings`, 'error');
+    showResult(`Please configure ${AI_CONFIG.name} API Key in Settings`, 'error');
     return;
   }
   
@@ -1250,8 +1188,7 @@ async function fetchAndEvaluate() {
     }
     
     // Evaluate with AI
-    const providerName = AI_PROVIDERS[selectedAIProvider].name;
-    showLoading('evaluateLoading', true, `${providerName} AI is analyzing items...`);
+    showLoading('evaluateLoading', true, `${AI_CONFIG.name} AI is analyzing items...`);
     
     const evaluation = await evaluateChildItemsWithAI(
       workItemTitle, 
@@ -1382,17 +1319,13 @@ ANALYZE AND RESPOND WITH ONLY THIS JSON STRUCTURE:
   "summary": "Overall assessment in 1-2 sentences"
 }`;
 
-  // Get the appropriate provider config
-  const provider = AI_PROVIDERS[selectedAIProvider];
-
-  const response = await fetch(provider.endpoint, {
+  const response = await fetch(AI_CONFIG.endpoint, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${apiKey}`,
+      "api-key": apiKey,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: provider.model,
       messages: [
         { role: "system", content: "You output only valid JSON. No markdown, no explanations." },
         { role: "user", content: prompt }
@@ -2905,12 +2838,9 @@ function getSettings() {
   };
 }
 
-// Get the appropriate AI API key based on selected provider
+// Get the AI API key
 function getAIApiKey() {
-  if (selectedAIProvider === 'openai') {
-    return document.getElementById('openaiKey').value.trim();
-  }
-  return document.getElementById('groq').value.trim();
+  return document.getElementById('apiKey').value.trim();
 }
 
 function stripHtml(html) {
@@ -3054,8 +2984,7 @@ async function forceGenerateTasks() {
   const userStory = `Title: ${title}\n\n${description}`;
   
   try {
-    const providerName = AI_PROVIDERS[selectedAIProvider].name;
-    showLoading('createLoading', true, `${providerName} AI is analyzing and breaking down the work item...`);
+    showLoading('createLoading', true, `${AI_CONFIG.name} AI is analyzing and breaking down the work item...`);
     
     const experienceContext = EXPERIENCE_CONFIG[level].promptContext;
     const multiplier = EXPERIENCE_CONFIG[level].multiplier;

@@ -435,34 +435,20 @@
             <p class="form-hint">Requires Work Items Read/Write permissions</p>
           </div>
 
-          <!-- AI Provider Selection -->
+          <!-- AI Configuration -->
           <div class="form-group">
-            <label class="form-label">AI Provider</label>
-            <select id="aiProvider" class="form-select">
-              <option value="groq">🆓 Groq (Free - Llama 3.1)</option>
-              <option value="openai">💎 OpenAI (Paid)</option>
-            </select>
-            <p class="form-hint" id="aiProviderHint">Groq is free and fast. OpenAI offers more advanced capabilities.</p>
+            <label class="form-label">AI Model</label>
+            <input type="text" id="modelName" class="form-input" value="gpt-5.2-chat" readonly disabled style="background-color: #f3f4f6; cursor: not-allowed;" />
+            <p class="form-hint">Model: gpt-5.2-chat (Azure OpenAI)</p>
           </div>
           
-          <!-- Groq API Key -->
-          <div class="form-group" id="groqKeyGroup">
-            <label class="form-label">Groq API Key</label>
+          <div class="form-group">
+            <label class="form-label">API Key</label>
             <div class="input-row">
-              <input type="password" id="groq" class="form-input" placeholder="Groq API Key (free)" />
-              <button class="btn btn-icon-only" id="toggleGroqVisibility" title="Show/Hide">👁</button>
+              <input type="password" id="apiKey" class="form-input" placeholder="Enter your API key" />
+              <button class="btn btn-icon-only" id="toggleApiKeyVisibility" title="Show/Hide">👁</button>
             </div>
-            <p class="form-hint">Get free API key at <a href="https://console.groq.com" target="_blank">console.groq.com</a></p>
-          </div>
-
-          <!-- OpenAI API Key -->
-          <div class="form-group hidden" id="openaiKeyGroup">
-            <label class="form-label">OpenAI API Key</label>
-            <div class="input-row">
-              <input type="password" id="openaiKey" class="form-input" placeholder="sk-..." />
-              <button class="btn btn-icon-only" id="toggleOpenaiVisibility" title="Show/Hide">👁</button>
-            </div>
-            <p class="form-hint">Get API key at <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a></p>
+            <p class="form-hint">API key for Azure OpenAI GPT-5.2-Chat</p>
           </div>
 
           <!-- Storage Options -->
