@@ -18,6 +18,9 @@ let currentEvaluation = null;
 let currentEvalStoryId = null;
 let currentEvalStoryData = null;
 
+// Insights tab state
+let allInsightTeams = []; // Store all teams for filtering
+
 // AI Provider configuration
 const AI_CONFIG = {
   name: 'GPT-5.2-Chat',
@@ -142,6 +145,9 @@ function setupEventListeners() {
   document.getElementById('fetchUserWorkItems').onclick = fetchUserWorkItems;
   document.getElementById('applyFilters').onclick = applyInsightFilters;
   document.getElementById('autoFixAll').onclick = autoFixAllIncomplete;
+  
+  // Project filter change to update boards dynamically
+  document.getElementById('filterProject').onchange = updateBoardFilter;
   
   // Event delegation for insights results
   document.getElementById('insightsResults').addEventListener('click', handleInsightsClick);
@@ -1713,9 +1719,25 @@ async function fetchUserWorkItems() {
     allInsightWorkItems = [];
     const projectSet = new Set();
     const sprintSet = new Set();
+    const teamSet = new Set();
+    const projectTeamsMap = new Map(); // Map project to its teams
     
     for (const proj of projects) {
       try {
+        // Fetch teams for this project
+        const teamsResponse = await fetch(
+          `https://dev.azure.com/${org}/_apis/projects/${encodeURIComponent(proj.id)}/teams?api-version=7.0`,
+          {
+            headers: { "Authorization": `Basic ${auth}` }
+          }
+        );
+        
+        let projectTeams = [];
+        if (teamsResponse.ok) {
+          const teamsData = await teamsResponse.json();
+          projectTeams = teamsData.value || [];
+        }
+        
         const wiql = {
           query: `SELECT [System.Id], [System.Title], [System.WorkItemType], [System.IterationPath], [System.AreaPath], [System.TeamProject]
                   FROM WorkItems 
@@ -1745,9 +1767,27 @@ async function fetchUserWorkItems() {
             const items = await fetchWorkItemDetails(org, proj.name, auth, workItemIds);
             for (const item of items) {
               item.projectName = proj.name;
+              
+              // Extract team from Area Path
+              const areaPath = item.fields['System.AreaPath'] || '';
+              const iterationPath = item.fields['System.IterationPath'] || '';
+              
+              // Area path format: ProjectName\TeamName\... or ProjectName\...
+              const areaParts = areaPath.split('\\');
+              if (areaParts.length >= 2) {
+                item.teamName = areaParts[1]; // Second part is typically the team name
+              } else if (areaParts.length === 1) {
+                item.teamName = proj.name; // Default to project name
+              }
+              
               allInsightWorkItems.push(item);
               projectSet.add(proj.name);
-              const iterationPath = item.fields['System.IterationPath'] || '';
+              
+              if (item.teamName) {
+                const teamKey = `${proj.name}|${item.teamName}`;
+                teamSet.add(teamKey);
+              }
+              
               if (iterationPath) sprintSet.add(iterationPath);
             }
           }
@@ -1764,7 +1804,7 @@ async function fetchUserWorkItems() {
     }
     
     // Populate filter dropdowns
-    populateFilterDropdowns(Array.from(projectSet), Array.from(sprintSet));
+    populateFilterDropdowns(Array.from(projectSet), Array.from(teamSet), Array.from(sprintSet));
     
     // Show filters
     document.getElementById('insightFilters').classList.remove('hidden');
@@ -1779,12 +1819,17 @@ async function fetchUserWorkItems() {
   }
 }
 
-function populateFilterDropdowns(projects, sprints) {
+function populateFilterDropdowns(projects, teams, sprints) {
   const projectSelect = document.getElementById('filterProject');
+  const boardSelect = document.getElementById('filterBoard');
   const sprintSelect = document.getElementById('filterSprint');
+  
+  // Store teams globally for dynamic filtering
+  allInsightTeams = teams;
   
   // Clear existing options except first
   projectSelect.innerHTML = '<option value="">All Projects</option>';
+  boardSelect.innerHTML = '<option value="">All Boards</option>';
   sprintSelect.innerHTML = '<option value="">All Sprints</option>';
   
   // Add projects
@@ -1793,6 +1838,15 @@ function populateFilterDropdowns(projects, sprints) {
     option.value = proj;
     option.textContent = proj;
     projectSelect.appendChild(option);
+  });
+  
+  // Add teams/boards (format: ProjectName|TeamName)
+  teams.sort().forEach(teamKey => {
+    const [projectName, teamName] = teamKey.split('|');
+    const option = document.createElement('option');
+    option.value = teamKey;
+    option.textContent = `${projectName} - ${teamName}`;
+    boardSelect.appendChild(option);
   });
   
   // Add sprints
@@ -1805,16 +1859,55 @@ function populateFilterDropdowns(projects, sprints) {
   });
 }
 
+// Update board filter when project changes
+function updateBoardFilter() {
+  const projectFilter = document.getElementById('filterProject').value;
+  const boardSelect = document.getElementById('filterBoard');
+  
+  // Clear and reset
+  boardSelect.innerHTML = '<option value="">All Boards</option>';
+  
+  if (!projectFilter) {
+    // Show all boards if no project selected
+    allInsightTeams.sort().forEach(teamKey => {
+      const [projectName, teamName] = teamKey.split('|');
+      const option = document.createElement('option');
+      option.value = teamKey;
+      option.textContent = `${projectName} - ${teamName}`;
+      boardSelect.appendChild(option);
+    });
+  } else {
+    // Show only boards for selected project
+    const filteredTeams = allInsightTeams.filter(teamKey => teamKey.startsWith(projectFilter + '|'));
+    filteredTeams.sort().forEach(teamKey => {
+      const [projectName, teamName] = teamKey.split('|');
+      const option = document.createElement('option');
+      option.value = teamKey;
+      option.textContent = teamName; // Show only team name when project is selected
+      boardSelect.appendChild(option);
+    });
+  }
+}
+
 function applyInsightFilters() {
   const projectFilter = document.getElementById('filterProject').value;
+  const boardFilter = document.getElementById('filterBoard').value;
   const sprintFilter = document.getElementById('filterSprint').value;
   const typeFilter = document.getElementById('filterWorkItemType').value;
   
   filteredInsightWorkItems = allInsightWorkItems.filter(item => {
     const matchProject = !projectFilter || item.projectName === projectFilter;
+    
+    // Board filter uses ProjectName|TeamName format
+    let matchBoard = true;
+    if (boardFilter) {
+      const [filterProject, filterTeam] = boardFilter.split('|');
+      matchBoard = item.projectName === filterProject && item.teamName === filterTeam;
+    }
+    
     const matchSprint = !sprintFilter || item.fields['System.IterationPath'] === sprintFilter;
     const matchType = !typeFilter || item.fields['System.WorkItemType'] === typeFilter;
-    return matchProject && matchSprint && matchType;
+    return matchProject && matchBoard && matchSprint && matchType;
   });
   
   analyzeAndDisplayInsights();
