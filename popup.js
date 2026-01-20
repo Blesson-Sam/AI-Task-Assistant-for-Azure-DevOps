@@ -1,27 +1,43 @@
-// ============================================
-// AI Task Assistant for Azure DevOps
-// Modern Redesigned Version with 3 Tabs
-// ============================================
+// ================================================================================================
+// AI TASK ASSISTANT FOR AZURE DEVOPS
+// ================================================================================================
+// A Chrome extension for AI-powered task generation, evaluation, and insights for Azure DevOps
+// Features:
+//   - Create Task: Generate tasks using AI based on User Story context
+//   - Evaluate: Validate work items for completeness and date consistency  
+//   - Insights: Analyze projects for incomplete items and timeline issues
+// ================================================================================================
 
-let generatedTasks = [];
-let userStoryData = null;
-let iterationPath = null;
-let assignedTo = null;
-let areaPath = null;
-let selectedWorkItemType = 'User Story';
+// ================================================================================================
+// GLOBAL STATE MANAGEMENT
+// ================================================================================================
 
-// Parent Feature data (for context and date validation)
-let parentFeatureData = null;
+// Create Task Tab State
+let generatedTasks = [];           // AI-generated tasks from current session
+let userStoryData = null;          // Currently selected User Story data
+let iterationPath = null;          // Selected iteration/sprint path
+let assignedTo = null;             // Currently assigned user
+let areaPath = null;               // Selected area path
+let selectedWorkItemType = 'User Story';  // Type of work item being created
 
-// Evaluate tab state
-let currentEvaluation = null;
-let currentEvalStoryId = null;
-let currentEvalStoryData = null;
+// Parent context for validation
+let parentFeatureData = null;      // Parent Feature data for date validation
 
-// Insights tab state
-let allInsightTeams = []; // Store all teams for filtering
+// Evaluate Tab State
+let currentEvaluation = null;      // Current evaluation results
+let currentEvalStoryId = null;     // ID of User Story being evaluated
+let currentEvalStoryData = null;   // Full data of User Story being evaluated
 
-// AI Provider configuration
+// Insights Tab State
+// let currentInsights = null;        // Current insights analysis results
+let allInsightTeams = [];          // All teams for board/team filtering
+// let filteredInsightWorkItems = []; // Filtered work items for current view
+
+// ================================================================================================
+// CONSTANTS AND CONFIGURATION
+// ================================================================================================
+
+// AI Provider Configuration
 const AI_CONFIG = {
   name: 'GPT-5.2-Chat',
   model: 'gpt-5.2-chat',
@@ -29,7 +45,8 @@ const AI_CONFIG = {
   description: 'Azure OpenAI GPT-5.2-Chat'
 };
 
-// Experience level multipliers and descriptions
+// Experience Level Configuration
+// Defines time multipliers and context for different developer experience levels
 const EXPERIENCE_CONFIG = {
   fresher: {
     multiplier: 2.0,
@@ -53,7 +70,8 @@ const EXPERIENCE_CONFIG = {
   }
 };
 
-// Validation rules for different work item types
+// Work Item Validation Rules
+// Defines required fields for each work item type
 // isCustom: true means field might not exist in all Azure DevOps organizations
 // isDateField: true means field should be validated for logical date values
 const VALIDATION_RULES = {
@@ -87,16 +105,32 @@ const VALIDATION_RULES = {
   ]
 };
 
-// Initialize on load
+// ================================================================================================
+// INITIALIZATION
+// ================================================================================================
+
+/**
+ * Initialize the extension when DOM is loaded
+ * - Load saved settings
+ * - Setup event listeners
+ * - Update UI with experience info
+ */
 document.addEventListener('DOMContentLoaded', () => {
   loadSettings();
   setupEventListeners();
   updateExperienceInfo();
 });
 
-// Setup all event listeners
+// ================================================================================================
+// EVENT LISTENERS SETUP
+// ================================================================================================
+
+/**
+ * Setup all event listeners for the extension
+ * Organizes listeners by tab and functionality
+ */
 function setupEventListeners() {
-  // Settings
+  // ========== Settings Modal ==========
   document.getElementById('settingsBtn').onclick = openSettingsModal;
   document.getElementById('closeSettings').onclick = closeSettingsModal;
   document.getElementById('saveSettings').onclick = saveSettings;
@@ -108,12 +142,12 @@ function setupEventListeners() {
     if (e.target.id === 'settingsModal') closeSettingsModal();
   };
   
-  // Tab navigation
+  // ========== Tab Navigation ==========
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.onclick = () => switchTab(btn.dataset.tab);
   });
   
-  // Work item type selection
+  // ========== Work Item Type Selection ==========
   document.querySelectorAll('.type-btn').forEach(btn => {
     btn.onclick = () => selectWorkItemType(btn);
   });
@@ -121,7 +155,7 @@ function setupEventListeners() {
   // Initialize hint text for default selection (User Story)
   initializeWorkItemTypeHint();
   
-  // Tab 1: Create Task
+  // ========== Tab 1: Create Task ==========
   document.getElementById('fetchWorkItem').onclick = fetchWorkItem;
   document.getElementById('generateTasks').onclick = generateTasks;
   document.getElementById('createAllTasks').onclick = createAllTasksInADO;
@@ -132,7 +166,7 @@ function setupEventListeners() {
   document.getElementById('tasksList').addEventListener('click', handleTaskListClick);
   document.getElementById('tasksList').addEventListener('change', handleTaskCheckboxChange);
   
-  // Tab 2: Evaluate Tasks
+  // ========== Tab 2: Evaluate Tasks ==========
   document.getElementById('fetchEvalStory').onclick = fetchAndEvaluate;
   document.getElementById('evalTypeFeature').onclick = () => selectEvalWorkItemType('Feature');
   document.getElementById('evalTypeUserStory').onclick = () => selectEvalWorkItemType('User Story');
@@ -141,7 +175,7 @@ function setupEventListeners() {
   document.getElementById('evaluationResults').addEventListener('click', handleEvaluationClick);
   document.getElementById('evalSummary').addEventListener('click', handleEvaluationClick);
   
-  // Tab 3: Insights
+  // ========== Tab 3: Insights ==========
   document.getElementById('fetchUserWorkItems').onclick = fetchUserWorkItems;
   document.getElementById('applyFilters').onclick = applyInsightFilters;
   document.getElementById('autoFixAll').onclick = autoFixAllIncomplete;
@@ -152,19 +186,18 @@ function setupEventListeners() {
   // Event delegation for insights results
   document.getElementById('insightsResults').addEventListener('click', handleInsightsClick);
   
-  // Security controls
+  // ========== Security Controls ==========
   document.getElementById('togglePatVisibility').onclick = () => togglePasswordVisibility('pat');
   document.getElementById('clearAllData').onclick = clearAllStoredData;
 }
 
-// Toggle password visibility
-function togglePasswordVisibility(inputId) {
-  const input = document.getElementById(inputId);
-  const isPassword = input.type === 'password';
-  input.type = isPassword ? 'text' : 'password';
-}
+// ================================================================================================
+// EVENT DELEGATION HANDLERS
+// ================================================================================================
 
-// Event delegation handler for Evaluate tab buttons
+/**
+ * Handle clicks in the Evaluate tab (Create Task, Delete Item, etc.)
+ */
 function handleEvaluationClick(e) {
   const target = e.target.closest('button');
   if (!target) return;
@@ -181,7 +214,9 @@ function handleEvaluationClick(e) {
   }
 }
 
-// Event delegation handler for task list clicks
+/**
+ * Handle clicks in the task list (Edit, Remove, Go to Evaluate, etc.)
+ */
 function handleTaskListClick(e) {
   const target = e.target.closest('button');
   if (!target) return;
@@ -201,7 +236,9 @@ function handleTaskListClick(e) {
   }
 }
 
-// Event delegation handler for task checkbox changes
+/**
+ * Handle checkbox changes in task list (select/deselect tasks)
+ */
 function handleTaskCheckboxChange(e) {
   const checkbox = e.target;
   if (checkbox.type === 'checkbox' && checkbox.dataset.taskId) {
@@ -210,22 +247,46 @@ function handleTaskCheckboxChange(e) {
   }
 }
 
-// ============================================
-// Settings Modal
-// ============================================
+/**
+ * Handle clicks in the Insights results (Auto Fix single item, etc.)
+ */
+function handleInsightsClick(e) {
+  const target = e.target.closest('button');
+  if (!target) return;
+  
+  if (target.dataset.action === 'autoFix') {
+    const itemId = parseInt(target.dataset.itemId, 10);
+    const itemType = target.dataset.itemType;
+    autoFixSingleItem(itemId, itemType);
+  }
+}
 
+// ================================================================================================
+// SETTINGS MANAGEMENT
+// ================================================================================================
+
+// Session-only credentials (not persisted if "Remember Credentials" is unchecked)
+let sessionCredentials = {
+  pat: null,
+  apiKey: null
+};
+
+/**
+ * Open the settings modal
+ */
 function openSettingsModal() {
   document.getElementById('settingsModal').classList.remove('hidden');
-  // Load remember preference
   loadRememberPreference();
 }
 
+/**
+ * Close the settings modal
+ * If "remember" is unchecked, store credentials only in session
+ */
 function closeSettingsModal() {
   document.getElementById('settingsModal').classList.add('hidden');
-  // If "remember" is unchecked, clear sensitive data from form (but keep session)
   const remember = document.getElementById('rememberCredentials').checked;
   if (!remember) {
-    // Keep in session memory but will be cleared on popup close
     sessionCredentials = {
       pat: document.getElementById('pat').value,
       apiKey: document.getElementById('apiKey').value
@@ -233,27 +294,21 @@ function closeSettingsModal() {
   }
 }
 
-// Session-only credentials (not persisted)
-let sessionCredentials = {
-  pat: null,
-  apiKey: null
-};
-
-// Load remember preference
+/**
+ * Load the "Remember Credentials" checkbox state
+ */
 function loadRememberPreference() {
   if (typeof chrome !== 'undefined' && chrome.storage) {
     chrome.storage.local.get(['rememberCredentials'], (data) => {
       const checkbox = document.getElementById('rememberCredentials');
-      if (data.rememberCredentials === false) {
-        checkbox.checked = false;
-      } else {
-        checkbox.checked = true;
-      }
+      checkbox.checked = data.rememberCredentials !== false;
     });
   }
 }
 
-// Load saved settings from chrome storage
+/**
+ * Load saved settings from Chrome storage
+ */
 function loadSettings() {
   if (typeof chrome !== 'undefined' && chrome.storage) {
     chrome.storage.local.get(['org', 'project', 'pat', 'apiKey', 'rememberCredentials'], (data) => {
