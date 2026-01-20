@@ -38,12 +38,28 @@ let allInsightTeams = [];          // All teams for board/team filtering
 // ================================================================================================
 
 // AI Provider Configuration
-const AI_CONFIG = {
-  name: 'GPT-5.2-Chat',
-  model: 'gpt-5.2-chat',
-  endpoint: 'https://raja-mkdvd70u-eastus2.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview',
-  description: 'Azure OpenAI GPT-5.2-Chat'
+const AI_PROVIDERS = {
+  azure: {
+    name: 'Azure OpenAI',
+    model: 'gpt-4',
+    endpoint: 'https://raja-mkdvd70u-eastus2.cognitiveservices.azure.com/openai/deployments/gpt-4/chat/completions?api-version=2024-08-01-preview',
+    description: 'Azure OpenAI GPT-4',
+    headerType: 'api-key'
+  },
+  groq: {
+    name: 'Groq',
+    model: 'llama-3.1-8b-instant',
+    endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+    description: 'Free and fast, uses Llama 3.1',
+    headerType: 'bearer'
+  }
 };
+
+// Get current AI provider configuration
+function getAIConfig() {
+  const provider = document.getElementById('aiProvider')?.value || 'azure';
+  return AI_PROVIDERS[provider];
+}
 
 // Experience Level Configuration
 // Defines time multipliers and context for different developer experience levels
@@ -136,6 +152,7 @@ function setupEventListeners() {
   document.getElementById('saveSettings').onclick = saveSettings;
   document.getElementById('testConnection').onclick = testADOConnection;
   document.getElementById('toggleApiKeyVisibility').onclick = () => togglePasswordVisibility('apiKey');
+  document.getElementById('aiProvider').onchange = updateAIProviderHints;
   
   // Close modal on overlay click
   document.getElementById('settingsModal').onclick = (e) => {
@@ -311,9 +328,13 @@ function loadRememberPreference() {
  */
 function loadSettings() {
   if (typeof chrome !== 'undefined' && chrome.storage) {
-    chrome.storage.local.get(['org', 'project', 'pat', 'apiKey', 'rememberCredentials'], (data) => {
+    chrome.storage.local.get(['org', 'project', 'pat', 'apiKey', 'aiProvider', 'rememberCredentials'], (data) => {
       if (data.org) document.getElementById('org').value = data.org;
       if (data.project) document.getElementById('project').value = data.project;
+      if (data.aiProvider) document.getElementById('aiProvider').value = data.aiProvider;
+      
+      // Update hints after loading provider
+      updateAIProviderHints();
       
       // Only load sensitive data if "remember" was enabled
       if (data.rememberCredentials !== false) {
@@ -335,6 +356,7 @@ function saveSettings() {
   const settings = {
     org: document.getElementById('org').value,
     project: document.getElementById('project').value,
+    aiProvider: document.getElementById('aiProvider').value,
     rememberCredentials: remember
   };
   
@@ -388,25 +410,27 @@ function clearAllStoredData() {
   }
 }
 
-// Test ADO Connection
+// Test ADO and AI Connections
 async function testADOConnection() {
   const org = document.getElementById('org').value.trim();
   const project = document.getElementById('project').value.trim();
   const pat = document.getElementById('pat').value.trim();
+  const apiKey = document.getElementById('apiKey').value.trim();
   const statusEl = document.getElementById('connectionStatus');
   
   if (!org || !project || !pat) {
     statusEl.className = 'connection-status error';
-    statusEl.textContent = 'Please fill in all fields';
+    statusEl.textContent = 'Please fill in Organization, Project, and PAT';
     statusEl.classList.remove('hidden');
     return;
   }
   
   try {
     statusEl.className = 'connection-status';
-    statusEl.textContent = 'Testing connection...';
+    statusEl.textContent = 'Testing Azure DevOps connection...';
     statusEl.classList.remove('hidden');
     
+    // Test ADO Connection
     const auth = btoa(":" + pat);
     const testUrl = `https://dev.azure.com/${org}/_apis/projects?api-version=7.0`;
     
@@ -415,24 +439,106 @@ async function testADOConnection() {
       headers: { "Authorization": `Basic ${auth}` }
     });
     
-    if (response.ok) {
-      const data = await response.json();
-      const projectNames = data.value.map(p => p.name);
-      
-      if (projectNames.includes(project)) {
-        statusEl.className = 'connection-status success';
-        statusEl.textContent = `✓ Connected! Project "${project}" found.`;
-      } else {
-        statusEl.className = 'connection-status error';
-        statusEl.textContent = `Project not found. Available: ${projectNames.slice(0, 3).join(', ')}...`;
-      }
-    } else {
+    if (!response.ok) {
       statusEl.className = 'connection-status error';
-      statusEl.textContent = `Connection failed: ${response.status}. Check PAT permissions.`;
+      statusEl.textContent = ` ADO Connection failed: ${response.status}. Check PAT permissions.`;
+      return;
     }
+    
+    const data = await response.json();
+    const projectNames = data.value.map(p => p.name);
+    
+    if (!projectNames.includes(project)) {
+      statusEl.className = 'connection-status error';
+      statusEl.textContent = ` Project not found. Available: ${projectNames.slice(0, 3).join(', ')}...`;
+      return;
+    }
+    
+    // ADO Success
+    statusEl.className = 'connection-status success';
+    statusEl.textContent = `✓ Azure DevOps connected! Project "${project}" found.`;
+    
+    // Test AI Connection if API key is provided
+    if (apiKey) {
+      statusEl.className = 'connection-status';
+      statusEl.textContent = `✓ ADO connected! Testing AI connection...`;
+      
+      const aiTestResult = await testAIConnection(apiKey);
+      
+      if (aiTestResult.success) {
+        statusEl.className = 'connection-status success';
+        statusEl.textContent = `✓ All connections successful! ADO: "${project}" | AI: ${aiTestResult.provider}`;
+      } else {
+        statusEl.className = 'connection-status warning';
+        statusEl.textContent = `✓ ADO connected | ❌ AI failed: ${aiTestResult.error}`;
+      }
+    }
+    
   } catch (error) {
     statusEl.className = 'connection-status error';
     statusEl.textContent = `Error: ${error.message}`;
+  }
+}
+
+// Test AI Connection
+async function testAIConnection(apiKey) {
+  try {
+    const aiConfig = getAIConfig();
+    
+    const headers = {
+      "Content-Type": "application/json"
+    };
+    
+    // Add appropriate auth header based on provider
+    if (aiConfig.headerType === 'bearer') {
+      headers["Authorization"] = `Bearer ${apiKey}`;
+    } else {
+      headers["api-key"] = apiKey;
+    }
+    
+    // Small test request
+    const response = await fetch(aiConfig.endpoint, {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify({
+        messages: [
+          { role: "system", content: "You are a helpful assistant." },
+          { role: "user", content: "Say 'OK' if you can read this." }
+        ],
+        temperature: 0.3,
+        max_tokens: 10,
+        model: aiConfig.model
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      return { 
+        success: false, 
+        error: errorData.error?.message || `API Error: ${response.status}` 
+      };
+    }
+    
+    const data = await response.json();
+    
+    // Verify response has expected structure
+    if (data.choices && data.choices[0]?.message?.content) {
+      return { 
+        success: true, 
+        provider: aiConfig.name 
+      };
+    } else {
+      return { 
+        success: false, 
+        error: 'Unexpected response format' 
+      };
+    }
+    
+  } catch (error) {
+    return { 
+      success: false, 
+      error: error.message 
+    };
   }
 }
 
@@ -499,6 +605,27 @@ function updateExperienceInfo() {
   const level = document.getElementById('level').value;
   const info = EXPERIENCE_CONFIG[level];
   document.getElementById('experienceInfo').innerHTML = info.description;
+}
+
+// Update AI provider hints
+function updateAIProviderHints() {
+  const provider = document.getElementById('aiProvider')?.value || 'azure';
+  const config = AI_PROVIDERS[provider];
+  
+  const providerHint = document.getElementById('aiProviderHint');
+  const apiKeyHint = document.getElementById('apiKeyHint');
+  
+  if (providerHint) {
+    providerHint.textContent = config.description;
+  }
+  
+  if (apiKeyHint) {
+    if (provider === 'groq') {
+      apiKeyHint.textContent = 'Get free API key from https://console.groq.com';
+    } else {
+      apiKeyHint.textContent = 'API key for Azure OpenAI service';
+    }
+  }
 }
 
 // ============================================
@@ -603,7 +730,6 @@ async function generateTasks() {
   const title = document.getElementById('workItemTitle').value;
   const description = document.getElementById('workItemDescription').value;
   const level = document.getElementById('level').value;
-  const daysToComplete = parseInt(document.getElementById('daysToComplete').value) || 5;
   const storyId = document.getElementById('workItemId').value.trim();
   
   const userStory = `Title: ${title}\n\n${description}`;
@@ -614,7 +740,7 @@ async function generateTasks() {
   }
   
   if (!aiApiKey) {
-    showResult(`Please enter your ${AI_CONFIG.name} API Key in Settings`, 'error');
+    showResult(`Please enter your ${getAIConfig().name} API Key in Settings`, 'error');
     return;
   }
   
@@ -636,14 +762,21 @@ async function generateTasks() {
   }
   
   try {
-    showLoading('createLoading', true, `${AI_CONFIG.name} AI is analyzing and breaking down the work item...`);
+    showLoading('createLoading', true, `${getAIConfig().name} AI is analyzing and breaking down the work item...`);
     
     const experienceContext = EXPERIENCE_CONFIG[level].promptContext;
     const multiplier = EXPERIENCE_CONFIG[level].multiplier;
-    const totalHoursAvailable = daysToComplete * 6;
-    const hoursForAI = Math.floor(totalHoursAvailable / multiplier);
     
-    const tasks = await callAI(userStory, experienceContext, aiApiKey, hoursForAI, totalHoursAvailable);
+    // Get Story Points from fetched work item to give AI context about complexity
+    let storyPointsContext = '';
+    if (userStoryData) {
+      const storyPoints = userStoryData.fields['Microsoft.VSTS.Scheduling.StoryPoints'];
+      if (storyPoints) {
+        storyPointsContext = storyPoints;
+      }
+    }
+    
+    const tasks = await callAI(userStory, experienceContext, aiApiKey, storyPointsContext, multiplier);
     
     const validActivities = ['Deployment', 'Design', 'Development', 'Documentation', 'Requirements', 'Testing'];
     
@@ -666,7 +799,7 @@ async function generateTasks() {
 }
 
 // Call AI API (Azure OpenAI GPT-5.2-Chat)
-async function callAI(userStory, experienceContext, apiKey, hoursForAI, totalHoursAvailable) {
+async function callAI(userStory, experienceContext, apiKey, storyPointsContext, multiplier) {
   // Determine what to generate based on selected work item type
   const isFeature = selectedWorkItemType === 'Feature';
   const itemToGenerate = isFeature ? 'User Stories' : 'Tasks';
@@ -693,16 +826,21 @@ Feature Description: ${featureDesc}`;
     }
   }
   
-  // Add User Story timeline context if available
-  let timelineContext = '';
+  // Add User Story timeline and complexity context
+  let complexityContext = '';
   if (!isFeature && userStoryData) {
     const storyStartDate = userStoryData.fields['Microsoft.VSTS.Scheduling.StartDate'];
     const storyFinishDate = userStoryData.fields['Microsoft.VSTS.Scheduling.FinishDate'];
+    
+    if (storyPointsContext) {
+      complexityContext += `\n\nSTORY COMPLEXITY:
+Story Points: ${storyPointsContext}`;
+    }
+    
     if (storyStartDate || storyFinishDate) {
-      timelineContext = `\n\nUSER STORY TIMELINE:
+      complexityContext += `\nTIMELINE:
 Start Date: ${storyStartDate ? new Date(storyStartDate).toLocaleDateString() : 'Not set'}
-End Date: ${storyFinishDate ? new Date(storyFinishDate).toLocaleDateString() : 'Not set'}
-IMPORTANT: All tasks must be completed within this timeline.`;
+End Date: ${storyFinishDate ? new Date(storyFinishDate).toLocaleDateString() : 'Not set'}`;
     }
   }
   
@@ -741,45 +879,56 @@ RESPOND WITH ONLY A VALID JSON ARRAY:
     : `You are an expert Agile project manager. Break down the following work item into detailed, actionable development tasks.${parentContext}
 
 USER STORY:
-${userStory}${timelineContext}
+${userStory}${complexityContext}
 
 DEVELOPER CONTEXT:
 Tasks will be assigned to ${experienceContext}.
 
-TIME CONSTRAINT:
-- Maximum hours for all tasks: ${hoursForAI} hours
-- Each task should be 1-6 hours
-
 INSTRUCTIONS:
-1. Break down into 2-5 specific, actionable tasks
-2. Total hours MUST NOT exceed ${hoursForAI} hours
-3. Focus on essential tasks only
-4. Tasks should be planned sequentially so they complete within the timeline
+1. Analyze the story complexity (Story Points if provided) and timeline to determine appropriate task breakdown
+2. Break down into 2-5 specific, actionable tasks based on the work complexity
+3. Each task should be 1-6 hours (1 full day max per task)
+4. Estimate hours realistically based on:
+   - Story complexity/points
+   - Developer experience level
+   - Technical requirements
+5. If timeline dates are provided, ensure tasks fit within the timeframe
+6. Focus on essential tasks only
 
 RESPOND WITH ONLY A VALID JSON ARRAY:
 [
   {
     "title": "Clear task title",
     "description": "What needs to be done and how",
-    "hours": number,
+    "hours": number (1-6 hours, realistic estimate),
     "priority": 1 | 2 | 3 | 4,
     "activity": "Development" | "Testing" | "Design" | "Documentation" | "Deployment" | "Requirements"
   }
 ]`;
 
-  const response = await fetch(AI_CONFIG.endpoint, {
+  const aiConfig = getAIConfig();
+  const headers = {
+    "Content-Type": "application/json"
+  };
+  
+  // Add appropriate auth header based on provider
+  if (aiConfig.headerType === 'bearer') {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  } else {
+    headers["api-key"] = apiKey;
+  }
+  
+  const response = await fetch(aiConfig.endpoint, {
     method: "POST",
-    headers: {
-      "api-key": apiKey,
-      "Content-Type": "application/json"
-    },
+    headers: headers,
     body: JSON.stringify({
       messages: [
         { role: "system", content: "You output only valid JSON arrays. No markdown, no explanations." },
         { role: "user", content: prompt }
       ],
       temperature: 0.3,
-      max_tokens: 2000
+      max_tokens: 2000,
+      model: aiConfig.model
     })
   });
 
@@ -1184,7 +1333,7 @@ async function fetchAndEvaluate() {
   }
   
   if (!aiApiKey) {
-    showResult(`Please configure ${AI_CONFIG.name} API Key in Settings`, 'error');
+    showResult(`Please configure ${getAIConfig().name} API Key in Settings`, 'error');
     return;
   }
   
@@ -1249,7 +1398,7 @@ async function fetchAndEvaluate() {
     }
     
     // Evaluate with AI
-    showLoading('evaluateLoading', true, `${AI_CONFIG.name} AI is analyzing items...`);
+    showLoading('evaluateLoading', true, `${getAIConfig().name} AI is analyzing items...`);
     
     const evaluation = await evaluateChildItemsWithAI(
       workItemTitle, 
@@ -1380,19 +1529,29 @@ ANALYZE AND RESPOND WITH ONLY THIS JSON STRUCTURE:
   "summary": "Overall assessment in 1-2 sentences"
 }`;
 
-  const response = await fetch(AI_CONFIG.endpoint, {
+  const aiConfig = getAIConfig();
+  const headers = {
+    "Content-Type": "application/json"
+  };
+  
+  // Add appropriate auth header based on provider
+  if (aiConfig.headerType === 'bearer') {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  } else {
+    headers["api-key"] = apiKey;
+  }
+  
+  const response = await fetch(aiConfig.endpoint, {
     method: "POST",
-    headers: {
-      "api-key": apiKey,
-      "Content-Type": "application/json"
-    },
+    headers: headers,
     body: JSON.stringify({
       messages: [
         { role: "system", content: "You output only valid JSON. No markdown, no explanations." },
         { role: "user", content: prompt }
       ],
       temperature: 0.3,
-      max_tokens: 2000
+      max_tokens: 2000,
+      model: aiConfig.model
     })
   });
 
@@ -3166,6 +3325,21 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+function togglePasswordVisibility(fieldId) {
+  const field = document.getElementById(fieldId);
+  const button = document.getElementById(`toggle${fieldId.charAt(0).toUpperCase() + fieldId.slice(1)}Visibility`);
+  
+  if (field.type === 'password') {
+    field.type = 'text';
+    button.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
+    button.title = 'Hide';
+  } else {
+    field.type = 'password';
+    button.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+    button.title = 'Show';
+  }
+}
+
 function showLoading(elementId, show, message = 'Loading...') {
   const loading = document.getElementById(elementId);
   if (show) {
@@ -3295,7 +3469,7 @@ async function forceGenerateTasks() {
   const userStory = `Title: ${title}\n\n${description}`;
   
   try {
-    showLoading('createLoading', true, `${AI_CONFIG.name} AI is analyzing and breaking down the work item...`);
+    showLoading('createLoading', true, `${getAIConfig().name} AI is analyzing and breaking down the work item...`);
     
     const experienceContext = EXPERIENCE_CONFIG[level].promptContext;
     const multiplier = EXPERIENCE_CONFIG[level].multiplier;

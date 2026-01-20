@@ -111,11 +111,11 @@
             </div>
           </div>
 
-          <!-- Days to Complete -->
-          <div class="form-group">
+          <!-- Days to Complete - Hidden, auto-calculated based on Story Points -->
+          <div class="form-group" style="display: none;">
             <label class="form-label">Days to Complete</label>
             <div class="input-row">
-              <input type="number" id="daysToComplete" class="form-input" min="1" max="30" value="5" />
+              <input type="number" id="daysToComplete" class="form-input" min="1" max="30" value="4" />
               <span class="input-suffix">days</span>
             </div>
             <p class="form-hint">AI will fit tasks within this timeframe (6 hrs/day)</p>
@@ -434,25 +434,28 @@
             <label class="form-label">Azure DevOps PAT</label>
             <div class="input-row">
               <input type="password" id="pat" class="form-input" placeholder="Personal Access Token" />
-              <button class="btn btn-icon-only" id="togglePatVisibility" title="Show/Hide">👁</button>
+              <button class="btn btn-icon-only" id="togglePatVisibility" title="Show/Hide"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
             </div>
             <p class="form-hint">Requires Work Items Read/Write permissions</p>
           </div>
 
           <!-- AI Configuration -->
           <div class="form-group">
-            <label class="form-label">AI Model</label>
-            <input type="text" id="modelName" class="form-input" value="gpt-5.2-chat" readonly disabled style="background-color: #f3f4f6; cursor: not-allowed;" />
-            <p class="form-hint">Model: gpt-5.2-chat (Azure OpenAI)</p>
+            <label class="form-label">AI Provider</label>
+            <select id="aiProvider" class="form-select">
+              <option value="azure">Azure OpenAI (GPT-4)</option>
+              <option value="groq">Groq (Llama 3.1 - Free & Fast)</option>
+            </select>
+            <p class="form-hint" id="aiProviderHint">Azure OpenAI GPT-4</p>
           </div>
           
           <div class="form-group">
             <label class="form-label">API Key</label>
             <div class="input-row">
               <input type="password" id="apiKey" class="form-input" placeholder="Enter your API key" />
-              <button class="btn btn-icon-only" id="toggleApiKeyVisibility" title="Show/Hide">👁</button>
+              <button class="btn btn-icon-only" id="toggleApiKeyVisibility" title="Show/Hide"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
             </div>
-            <p class="form-hint">API key for Azure OpenAI GPT-5.2-Chat</p>
+            <p class="form-hint" id="apiKeyHint">API key for Azure OpenAI GPT-4</p>
           </div>
 
           <!-- Storage Options -->
