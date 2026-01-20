@@ -2030,6 +2030,51 @@ async function fetchWorkItemDetails(org, project, auth, ids) {
   return allItems;
 }
 
+// Fetch child tasks for a User Story to calculate total hours
+async function fetchChildTasksForStory(org, project, auth, storyId) {
+  try {
+    // First get the story with its relations
+    const storyUrl = `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems/${storyId}?$expand=relations&api-version=7.0`;
+    const storyResponse = await fetch(storyUrl, {
+      headers: { "Authorization": `Basic ${auth}` }
+    });
+    
+    if (!storyResponse.ok) return [];
+    
+    const storyData = await storyResponse.json();
+    const relations = storyData.relations || [];
+    
+    // Get child work item IDs
+    const childIds = relations
+      .filter(r => r.rel === 'System.LinkTypes.Hierarchy-Forward')
+      .map(r => {
+        const match = r.url.match(/workitems\/(\d+)/);
+        return match ? match[1] : null;
+      })
+      .filter(id => id !== null);
+    
+    if (childIds.length === 0) return [];
+    
+    // Fetch child work items
+    const childUrl = `https://dev.azure.com/${org}/${encodeURIComponent(project)}/_apis/wit/workitems?ids=${childIds.join(',')}&api-version=7.0`;
+    const childResponse = await fetch(childUrl, {
+      headers: { "Authorization": `Basic ${auth}` }
+    });
+    
+    if (!childResponse.ok) return [];
+    
+    const childData = await childResponse.json();
+    const tasks = (childData.value || []).filter(item => 
+      item.fields['System.WorkItemType'] === 'Task'
+    );
+    
+    return tasks;
+  } catch (error) {
+    console.error('Error fetching child tasks:', error);
+    return [];
+  }
+}
+
 function validateWorkItem(item, type) {
   const rules = VALIDATION_RULES[type] || [];
   const missingFields = [];        // Clean labels for auto-fix
@@ -2116,9 +2161,15 @@ function validateWorkItem(item, type) {
         // Check Planned End Date (Finish Date) - should be after Start Date
         if (rule.label === 'Planned End Date' && plannedStartDate) {
           const startDate = new Date(plannedStartDate);
-          if (!isNaN(startDate.getTime()) && dateValue <= startDate) {
-            invalidFieldMessages.push(`Planned End Date must be after Planned Start Date`);
-            isInvalid = true;
+          if (!isNaN(startDate.getTime())) {
+            // For User Stories: Check if start and end are the same day
+            if (type === 'User Story' && dateValue.toDateString() === startDate.toDateString()) {
+              invalidFieldMessages.push(`Planned End Date is same as Start Date (${startDate.toLocaleDateString()}) - needs adjustment based on task estimates`);
+              isInvalid = true;
+            } else if (dateValue <= startDate) {
+              invalidFieldMessages.push(`Planned End Date must be after Planned Start Date`);
+              isInvalid = true;
+            }
           }
         }
         
@@ -2139,7 +2190,15 @@ function validateWorkItem(item, type) {
           const startDate = new Date(plannedStartDate);
           const endDate = new Date(plannedEndDate);
           if (!isNaN(startDate.getTime()) && !isNaN(endDate.getTime())) {
-            if (dateValue < startDate || dateValue > endDate) {
+            // If start and end dates are the same, flag for adjustment
+            if (startDate.toDateString() === endDate.toDateString()) {
+              invalidFieldMessages.push(`${rule.label} cannot be set - Planned Start and End dates are the same. End date needs adjustment based on task estimates.`);
+              // Also flag Planned End Date for fixing
+              if (!invalidFieldLabels.includes('Planned End Date')) {
+                invalidFieldLabels.push('Planned End Date');
+              }
+              isInvalid = true;
+            } else if (dateValue < startDate || dateValue > endDate) {
               invalidFieldMessages.push(`${rule.label} should be between Planned Start (${startDate.toLocaleDateString()}) and End (${endDate.toLocaleDateString()})`);
               isInvalid = true;
             }
@@ -2191,24 +2250,39 @@ function validateWorkItem(item, type) {
     // Original Estimate should equal Remaining + Completed
     if (origNum > 0 || remNum > 0 || compNum > 0) {
       const expected = remNum + compNum;
-      if (origNum !== expected) {
+      const tolerance = 0.01; // Small tolerance for floating point
+      
+      if (Math.abs(origNum - expected) > tolerance) {
         invalidFieldMessages.push(`Work tracking mismatch: Original Estimate (${origNum}h) ≠ Remaining (${remNum}h) + Completed (${compNum}h) = ${expected}h`);
-        // Mark fields that need recalculation
-        if (origNum === 0 && (remNum > 0 || compNum > 0)) {
-          // Missing Original - need to calculate it
-          invalidFieldLabels.push('Original Estimate');
-        } else if (origNum > 0 && remNum > 0 && compNum === 0) {
-          // Have Original and Remaining, need to calculate Completed
-          invalidFieldLabels.push('Completed Work');
-        } else if (origNum > 0 && remNum === 0 && compNum === 0) {
-          // Have Original but missing work breakdown
-          invalidFieldLabels.push('Remaining Work');
-        } else if (remNum > origNum) {
-          // Remaining exceeds Original - fix Remaining
-          invalidFieldLabels.push('Remaining Work');
+        
+        // Determine which fields to fix
+        // Priority: If Original and one other exist, calculate the missing one
+        if (origNum > 0 && remNum > 0 && compNum >= 0) {
+          // Have Original and Remaining - calculate Completed
+          if (!invalidFieldLabels.includes('Completed Work')) {
+            invalidFieldLabels.push('Completed Work');
+          }
+        } else if (origNum > 0 && compNum > 0 && remNum >= 0) {
+          // Have Original and Completed - calculate Remaining
+          if (!invalidFieldLabels.includes('Remaining Work')) {
+            invalidFieldLabels.push('Remaining Work');
+          }
+        } else if (remNum > 0 && compNum > 0) {
+          // Have Remaining and Completed - calculate Original
+          if (!invalidFieldLabels.includes('Original Estimate')) {
+            invalidFieldLabels.push('Original Estimate');
+          }
         } else {
-          // Generic mismatch - fix Completed Work as it's usually the field to update
-          invalidFieldLabels.push('Completed Work');
+          // Default: mark all three for consistency
+          if (!invalidFieldLabels.includes('Original Estimate')) {
+            invalidFieldLabels.push('Original Estimate');
+          }
+          if (!invalidFieldLabels.includes('Remaining Work')) {
+            invalidFieldLabels.push('Remaining Work');
+          }
+          if (!invalidFieldLabels.includes('Completed Work')) {
+            invalidFieldLabels.push('Completed Work');
+          }
         }
       }
     }
@@ -2586,8 +2660,20 @@ function generateDefaultValues(fieldsToFix, type, itemTitle, plannedStart, plann
   }
   
   // Calculate QA Ready Date: 2 days before planned end
+  // Ensure QA Ready Date is between start and end
   const qaReadyDate = new Date(plannedEndDate);
   qaReadyDate.setDate(qaReadyDate.getDate() - 2);
+  
+  // If QA Ready Date would be before start date, set it to 1 day before end
+  if (qaReadyDate < plannedStartDate) {
+    qaReadyDate.setTime(plannedEndDate.getTime());
+    qaReadyDate.setDate(qaReadyDate.getDate() - 1);
+    
+    // If still before start, use the same day as start
+    if (qaReadyDate < plannedStartDate) {
+      qaReadyDate.setTime(plannedStartDate.getTime());
+    }
+  }
   
   // Calculate default dates based on planned dates
   const twoWeeks = new Date(today.getTime() + 14 * 24 * 60 * 60 * 1000);
@@ -2603,17 +2689,42 @@ function generateDefaultValues(fieldsToFix, type, itemTitle, plannedStart, plann
     const comp = parseFloat(workTrackingData.completed) || 0;
     
     // Apply formula: Original = Remaining + Completed
-    // If 2 values exist, calculate the third
-    if (orig > 0 && comp > 0) {
-      // Have Original and Completed, calculate Remaining
+    // Determine which field to recalculate based on fieldsToFix
+    const fixOriginal = fieldsToFix.includes('Original Estimate');
+    const fixRemaining = fieldsToFix.includes('Remaining Work');
+    const fixCompleted = fieldsToFix.includes('Completed Work');
+    
+    // Priority: Fix the field that's marked as needing fix
+    if (fixCompleted && orig > 0 && rem >= 0) {
+      // Fix Completed: Completed = Original - Remaining
+      calcOriginal = orig;
+      calcRemaining = rem;
+      calcCompleted = Math.max(0, orig - rem);
+    } else if (fixRemaining && orig > 0 && comp >= 0) {
+      // Fix Remaining: Remaining = Original - Completed
       calcOriginal = orig;
       calcCompleted = comp;
       calcRemaining = Math.max(0, orig - comp);
+    } else if (fixOriginal && rem >= 0 && comp >= 0) {
+      // Fix Original: Original = Remaining + Completed
+      calcRemaining = rem;
+      calcCompleted = comp;
+      calcOriginal = rem + comp;
+    } else if (orig > 0 && rem > 0 && comp > 0) {
+      // All three exist - use Original and Remaining as source of truth
+      calcOriginal = orig;
+      calcRemaining = rem;
+      calcCompleted = Math.max(0, orig - rem);
     } else if (orig > 0 && rem > 0) {
       // Have Original and Remaining, calculate Completed
       calcOriginal = orig;
       calcRemaining = rem;
       calcCompleted = Math.max(0, orig - rem);
+    } else if (orig > 0 && comp > 0) {
+      // Have Original and Completed, calculate Remaining
+      calcOriginal = orig;
+      calcCompleted = comp;
+      calcRemaining = Math.max(0, orig - comp);
     } else if (rem > 0 && comp > 0) {
       // Have Remaining and Completed, calculate Original
       calcRemaining = rem;
@@ -2775,10 +2886,9 @@ async function autoFixSingleItem(itemId, itemType) {
   try {
     showLoading('insightsLoading', true, `Updating item #${itemId}...`);
     
-    // Use fieldsToFix which includes both missing and invalid fields
-    const fieldsToFix = item.fieldsToFix || item.missingFields || [];
+    const auth = btoa(":" + pat);
     
-    // For Tasks: pass Original Estimate; For User Stories: pass Story Points
+    // For Tasks: pass work tracking data; For User Stories: pass Story Points
     let estimateValue;
     let workTrackingData = null;
     
@@ -2794,12 +2904,66 @@ async function autoFixSingleItem(itemId, itemType) {
       estimateValue = item.rawItem?.fields?.['Microsoft.VSTS.Scheduling.StoryPoints'];
     }
     
+    // For User Stories with same-day start/end dates, fetch child tasks to calculate proper end date
+    let adjustedPlannedEndDate = item.plannedEndDate;
+    
+    if (itemType === 'User Story' && fieldsToFix.includes('Planned End Date')) {
+      const startDate = item.plannedStartDate ? new Date(item.plannedStartDate) : null;
+      const endDate = item.plannedEndDate ? new Date(item.plannedEndDate) : null;
+      
+      if (startDate && endDate && startDate.toDateString() === endDate.toDateString()) {
+        // Fetch child tasks to calculate total hours
+        try {
+          const childTasks = await fetchChildTasksForStory(org, projectName, auth, itemId);
+          let totalHours = 0;
+          
+          for (const task of childTasks) {
+            const taskHours = parseFloat(task.fields['Microsoft.VSTS.Scheduling.OriginalEstimate']) || 0;
+            totalHours += taskHours;
+          }
+          
+          if (totalHours > 0) {
+            // Calculate new end date: total hours / 6 hours per day
+            const hoursPerDay = 6;
+            const daysNeeded = Math.ceil(totalHours / hoursPerDay);
+            const calculatedEndDate = new Date(startDate);
+            calculatedEndDate.setDate(calculatedEndDate.getDate() + daysNeeded - 1);
+            adjustedPlannedEndDate = calculatedEndDate.toISOString();
+          } else {
+            // No child tasks or no hours - use Story Points estimate
+            const storyPoints = estimateValue || item.rawItem?.fields?.['Microsoft.VSTS.Scheduling.StoryPoints'] || 3;
+            const hoursPerPoint = 8;
+            const hoursPerDay = 6;
+            const totalHours = storyPoints * hoursPerPoint;
+            const daysNeeded = Math.ceil(totalHours / hoursPerDay);
+            const calculatedEndDate = new Date(startDate);
+            calculatedEndDate.setDate(calculatedEndDate.getDate() + daysNeeded - 1);
+            adjustedPlannedEndDate = calculatedEndDate.toISOString();
+          }
+        } catch (e) {
+          console.error('Error fetching child tasks:', e);
+          // Fallback to Story Points
+          const storyPoints = estimateValue || item.rawItem?.fields?.['Microsoft.VSTS.Scheduling.StoryPoints'] || 3;
+          const hoursPerPoint = 8;
+          const hoursPerDay = 6;
+          const totalHours = storyPoints * hoursPerPoint;
+          const daysNeeded = Math.ceil(totalHours / hoursPerDay);
+          const calculatedEndDate = new Date(startDate);
+          calculatedEndDate.setDate(calculatedEndDate.getDate() + daysNeeded - 1);
+          adjustedPlannedEndDate = calculatedEndDate.toISOString();
+        }
+      }
+    }
+    
+    // Use fieldsToFix which includes both missing and invalid fields
+    const fieldsToUpdate = item.fieldsToFix || item.missingFields || [];
+    
     const updates = generateDefaultValues(
-      fieldsToFix, 
+      fieldsToUpdate, 
       itemType, 
       item.title,
       item.plannedStartDate,
-      item.plannedEndDate,
+      adjustedPlannedEndDate, // Use adjusted end date
       estimateValue,
       workTrackingData
     );
@@ -2810,7 +2974,6 @@ async function autoFixSingleItem(itemId, itemType) {
       return;
     }
     
-    const auth = btoa(":" + pat);
     const response = await fetch(
       `https://dev.azure.com/${org}/${encodeURIComponent(projectName)}/_apis/wit/workitems/${itemId}?api-version=7.0`,
       {
