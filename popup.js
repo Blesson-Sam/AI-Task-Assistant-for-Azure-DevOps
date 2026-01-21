@@ -2296,17 +2296,6 @@ function validateWorkItem(item, type) {
   const invalidFieldMessages = []; // Detailed messages for display
   const dateWarnings = [];
   
-  // DEBUG: Log all fields in the work item to find correct field names
-  console.log(`\n=== ALL FIELDS FOR ITEM ${item.id} (${type}) ===`);
-  const allFieldNames = Object.keys(item.fields).sort();
-  allFieldNames.forEach(fieldName => {
-    const value = item.fields[fieldName];
-    if (fieldName.toLowerCase().includes('date') || fieldName.toLowerCase().includes('qa') || fieldName.toLowerCase().includes('actual')) {
-      console.log(`  ${fieldName}: ${JSON.stringify(value)}`);
-    }
-  });
-  console.log(`=== END ALL FIELDS ===\n`);
-  
   // Fields where 0 is a valid value
   const numericFieldsWhereZeroIsValid = [
     'Microsoft.VSTS.Scheduling.CompletedWork',
@@ -2329,13 +2318,20 @@ function validateWorkItem(item, type) {
   // For now, we'll use a placeholder or skip this validation
   
   for (const rule of rules) {
+    // DYNAMIC VALIDATION: Skip if field doesn't exist in the work item at all
+    // Only validate fields that are present in this specific work item
+    const fieldExists = rule.field in item.fields;
+    
+    if (!fieldExists) {
+      // Field is not configured in this work item's schema - skip validation
+      // This handles custom fields that may not exist in all organizations
+      continue;
+    }
+    
     const value = item.fields[rule.field];
     const isNumericZeroValid = numericFieldsWhereZeroIsValid.includes(rule.field);
     
-    // Debug: Log each field being checked
-    console.log(`Checking field: ${rule.label} (${rule.field})`, { value, isDateField: rule.isDateField });
-    
-    // Check if field is missing (including string "null")
+    // Check if field exists but is empty/missing value
     let isMissing = false;
     if (isNumericZeroValid) {
       isMissing = (value === undefined || value === null || value === '' || value === 'null');
@@ -2344,7 +2340,6 @@ function validateWorkItem(item, type) {
     }
     
     if (isMissing) {
-      console.log(`  -> Field is MISSING`);
       missingFields.push(rule.label);
       continue;
     }
@@ -2354,20 +2349,13 @@ function validateWorkItem(item, type) {
       const dateValue = new Date(value);
       let isInvalid = false;
       
-      // Debug logging for date validation
-      console.log(`Validating ${rule.label}: value="${value}", parsed=${dateValue.toISOString()}, minValid=${minValidDate.toISOString()}`);
-      
       // Check if date parsing failed or date is invalid (before 2020 - likely placeholder)
       if (isNaN(dateValue.getTime())) {
         invalidFieldMessages.push(`${rule.label} has invalid date format`);
         isInvalid = true;
-        console.log(`  -> Invalid: date parsing failed`);
       } else if (dateValue.getTime() < minValidDate.getTime()) {
         invalidFieldMessages.push(`${rule.label} (${dateValue.toLocaleDateString()} is invalid - before 2020)`);
         isInvalid = true;
-        console.log(`  -> Invalid: before 2020 (${dateValue.getTime()} < ${minValidDate.getTime()})`);
-      } else {
-        console.log(`  -> Valid date`);
       }
       
       // Only do further validation if date is valid
@@ -2544,14 +2532,6 @@ function validateWorkItem(item, type) {
   
   // Fields to fix = missing + invalid
   const fieldsToFix = [...missingFields, ...invalidFieldLabels];
-  
-  // Debug logging
-  console.log(`Validation result for ${item.id}:`, {
-    missingFields,
-    invalidFieldLabels,
-    invalidFieldMessages,
-    isComplete: missingFields.length === 0 && invalidFieldLabels.length === 0
-  });
   
   return {
     id: item.id,
