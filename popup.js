@@ -41,9 +41,9 @@ let allInsightTeams = [];          // All teams for board/team filtering
 const AI_PROVIDERS = {
   azure: {
     name: 'Azure OpenAI',
-    model: 'gpt-4',
-    endpoint: 'https://raja-mkdvd70u-eastus2.cognitiveservices.azure.com/openai/deployments/gpt-4/chat/completions?api-version=2024-08-01-preview',
-    description: 'Azure OpenAI GPT-4',
+    model: 'gpt-5.2-chat',
+    endpoint: 'https://raja-mkdvd70u-eastus2.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview',
+    description: 'Azure OpenAI GPT-5.2-Chat model',
     headerType: 'api-key'
   },
   groq: {
@@ -2296,6 +2296,20 @@ function validateWorkItem(item, type) {
   const invalidFieldMessages = []; // Detailed messages for display
   const dateWarnings = [];
   
+  // DEBUG: Log all fields present in this work item
+  console.log(`\n========================================`);
+  console.log(`VALIDATING: Item #${item.id} (${type})`);
+  console.log(`========================================`);
+  console.log(`ALL FIELDS PRESENT IN WORK ITEM:`);
+  const allFieldKeys = Object.keys(item.fields).sort();
+  allFieldKeys.forEach(fieldKey => {
+    const value = item.fields[fieldKey];
+    const displayValue = value === null ? 'null' : value === '' ? '(empty)' : value;
+    console.log(`  ✓ ${fieldKey}: ${displayValue}`);
+  });
+  console.log(`\nTOTAL FIELDS: ${allFieldKeys.length}`);
+  console.log(`========================================\n`);
+  
   // Fields where 0 is a valid value
   const numericFieldsWhereZeroIsValid = [
     'Microsoft.VSTS.Scheduling.CompletedWork',
@@ -2317,32 +2331,48 @@ function validateWorkItem(item, type) {
   // This would need to be fetched from Azure DevOps API in a real scenario
   // For now, we'll use a placeholder or skip this validation
   
+  console.log(`VALIDATION RULES FOR ${type}:`);
+  console.log(`Total rules to check: ${rules.length}`);
+  
   for (const rule of rules) {
-    // DYNAMIC VALIDATION: Skip if field doesn't exist in the work item at all
-    // Only validate fields that are present in this specific work item
+    // DYNAMIC VALIDATION: Only validate fields that exist in this work item
+    // Check if the field key is present in item.fields (even if value is null/empty)
     const fieldExists = rule.field in item.fields;
     
+    console.log(`\n  Checking: ${rule.label} (${rule.field})`);
+    console.log(`    Field exists in work item: ${fieldExists}`);
+    
     if (!fieldExists) {
-      // Field is not configured in this work item's schema - skip validation
-      // This handles custom fields that may not exist in all organizations
+      // Field doesn't exist in this work item's schema - skip validation
+      // This handles variations between different ADO configurations
+      console.log(`    → SKIPPED (not in work item schema)`);
       continue;
     }
     
     const value = item.fields[rule.field];
     const isNumericZeroValid = numericFieldsWhereZeroIsValid.includes(rule.field);
     
-    // Check if field exists but is empty/missing value
+    console.log(`    Value: ${value === null ? 'null' : value === '' ? '(empty string)' : value}`);
+    console.log(`    Is date field: ${rule.isDateField || false}`);
+    console.log(`    Zero is valid: ${isNumericZeroValid}`);
+    
+    // Field exists, now check if it has a value
     let isMissing = false;
     if (isNumericZeroValid) {
-      isMissing = (value === undefined || value === null || value === '' || value === 'null');
+      // For numeric fields where 0 is valid (Completed Work, Remaining Work)
+      isMissing = (value === null || value === '' || value === 'null' || value === undefined);
     } else {
-      isMissing = (value === undefined || value === null || value === '' || value === 0 || value === 'null');
+      // For all other fields
+      isMissing = (value === null || value === '' || value === 'null' || value === undefined || value === 0);
     }
     
     if (isMissing) {
+      console.log(`    → MISSING (field exists but has no value)`);
       missingFields.push(rule.label);
       continue;
     }
+    
+    console.log(`    → Has value, proceeding with validation...`);
     
     // Check date fields for validity
     if (rule.isDateField && value && value !== 'null') {
@@ -2532,6 +2562,13 @@ function validateWorkItem(item, type) {
   
   // Fields to fix = missing + invalid
   const fieldsToFix = [...missingFields, ...invalidFieldLabels];
+  
+  console.log(`\n========================================`);
+  console.log(`VALIDATION SUMMARY FOR #${item.id}:`);
+  console.log(`  Missing fields: ${missingFields.length > 0 ? missingFields.join(', ') : 'None'}`);
+  console.log(`  Invalid fields: ${invalidFieldLabels.length > 0 ? invalidFieldLabels.join(', ') : 'None'}`);
+  console.log(`  Is complete: ${missingFields.length === 0 && invalidFieldLabels.length === 0}`);
+  console.log(`========================================\n`);
   
   return {
     id: item.id,
